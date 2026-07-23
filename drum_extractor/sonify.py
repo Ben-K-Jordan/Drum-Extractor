@@ -22,24 +22,43 @@ from .logging_utils import get_logger
 
 log = get_logger(__name__)
 
-# Rough synthesis recipe per instrument: (kind, frequency_hz, decay_rate).
-# kind: "tone" (kick/toms), "noise" (snare/cymbals/hats).
+# Synthesis recipe per instrument. Two kinds:
+#   ("tone",  fundamental_hz, decay)              — kick/toms: pitched sine w/ drop
+#   ("noise", (band_lo, band_hi), decay)          — band-limited noise burst
+#   ("snare", fundamental_hz, decay)              — body tone + mid noise + wires
+# Bands are chosen to resemble REAL drum spectra, not just to sound okay: the
+# groove bank scores the transcriber on this audio, so if (e.g.) the snare were
+# plain white noise its energy would sit mostly above 5 kHz like a cymbal and
+# any threshold tuned on it would be meaningless for real snares.
 _VOICES = {
     KICK:         ("tone", 55, 30),
     TOM_LOW:      ("tone", 110, 18),
     TOM_MID:      ("tone", 160, 18),
     TOM_HIGH:     ("tone", 220, 18),
-    SNARE:        ("noise", 0, 25),
-    SIDE_STICK:   ("noise", 0, 60),
-    HIHAT_CLOSED: ("noise", 9000, 90),
-    HIHAT_OPEN:   ("noise", 9000, 25),
-    HIHAT_PEDAL:  ("noise", 7000, 70),
-    RIDE:         ("noise", 7000, 12),
-    RIDE_BELL:    ("noise", 5000, 14),
-    CRASH:        ("noise", 6000, 8),
-    CHINA:        ("noise", 5500, 8),
-    SPLASH:       ("noise", 8000, 16),
+    SNARE:        ("snare", 190, 25),
+    SIDE_STICK:   ("noise", (1500, 6000), 60),
+    HIHAT_CLOSED: ("noise", (4000, 13000), 90),
+    HIHAT_OPEN:   ("noise", (4000, 13000), 25),
+    HIHAT_PEDAL:  ("noise", (3500, 9000), 70),
+    RIDE:         ("noise", (3000, 10000), 12),
+    RIDE_BELL:    ("noise", (4000, 9000), 14),
+    CRASH:        ("noise", (2500, 14000), 8),
+    CHINA:        ("noise", (2000, 12000), 8),
+    SPLASH:       ("noise", (5000, 15000), 16),
 }
+
+
+def _band_noise(rng, length: int, sr: int, lo: float, hi: float):
+    """Band-limited white noise via FFT masking (pure numpy)."""
+    import numpy as np
+
+    noise = rng.standard_normal(length)
+    spec = np.fft.rfft(noise)
+    freqs = np.fft.rfftfreq(length, 1.0 / sr)
+    spec[(freqs < lo) | (freqs > hi)] = 0.0
+    out = np.fft.irfft(spec, n=length)
+    peak = float(np.max(np.abs(out))) or 1.0
+    return out / peak
 
 
 def sonify_drums(hits: list[DrumHit], out_path: str | Path, sr: int = 44100, tail: float = 1.0) -> Path:
@@ -59,16 +78,24 @@ def sonify_drums(hits: list[DrumHit], out_path: str | Path, sr: int = 44100, tai
     rng = np.random.default_rng(0)
 
     for h in hits:
-        kind, freq, decay = _VOICES.get(h.instrument, ("noise", 0, 30))
+        kind, param, decay = _VOICES.get(h.instrument, ("noise", (200, 8000), 30))
         length = int(min(0.4, 3.0 / decay) * sr)
         t = np.linspace(0, length / sr, length, endpoint=False)
         env = np.exp(-t * decay)
         if kind == "tone":
-            fsweep = freq * (1.5 * np.exp(-t * 20) + 1.0)  # slight pitch drop
+            fsweep = param * (1.5 * np.exp(-t * 20) + 1.0)  # slight pitch drop
             sig = np.sin(2 * np.pi * np.cumsum(fsweep) / sr)
-        else:  # noise, optionally high-passed by differencing
-            noise = rng.standard_normal(length)
-            sig = np.diff(noise, prepend=0) if freq >= 4000 else noise
+        elif kind == "snare":
+            # Real-snare balance: a low-mid body tone, mid-band shell noise, and
+            # a smaller high "wires" component.
+            sig = (
+                0.45 * np.sin(2 * np.pi * param * t)
+                + 0.60 * _band_noise(rng, length, sr, 150, 4500)
+                + 0.30 * _band_noise(rng, length, sr, 5000, 11000)
+            )
+        else:
+            lo, hi = param
+            sig = _band_noise(rng, length, sr, lo, hi)
         amp = 0.2 + 0.6 * (h.velocity / 127.0)
         snd = (amp * env * sig).astype(np.float32)
         i = int(h.time * sr)

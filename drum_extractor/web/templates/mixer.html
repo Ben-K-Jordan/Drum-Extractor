@@ -9,7 +9,7 @@
   * { box-sizing:border-box; margin:0; }
   body { background:#14161a; color:#e6e9ef; font:15px/1.5 system-ui,-apple-system,sans-serif;
          min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:1.5rem; gap:1.2rem; }
-  header { width:min(760px,95vw); display:flex; justify-content:space-between; align-items:baseline; }
+  header { width:min(860px,95vw); display:flex; justify-content:space-between; align-items:baseline; }
   header h1 { font-size:1.1rem; letter-spacing:.03em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%; }
   header a { color:#8b93a3; text-decoration:none; font-size:.85rem; }
   header a:hover { color:#e6e9ef; }
@@ -23,7 +23,7 @@
   #procerror { color:#ff7b6b; max-width:520px; text-align:center; white-space:pre-wrap; }
 
   /* console */
-  #console { display:none; flex-direction:column; gap:1.2rem; width:min(760px,95vw); }
+  #console { display:none; flex-direction:column; gap:1.2rem; width:min(860px,95vw); }
   .board { background:linear-gradient(#20242e,#191d25); border:1px solid #2c313c; border-radius:12px;
            padding:1.2rem; display:flex; justify-content:center; gap:1rem; flex-wrap:wrap; }
   .strip { width:108px; background:#161a21; border:1px solid #2c313c; border-radius:9px;
@@ -39,12 +39,16 @@
   .btns button.on-mute { background:#8a2f24; border-color:#a63a2c; color:#fff; }
   .btns button.on-solo { background:#8f7a1e; border-color:#ab9326; color:#fff; }
 
-  .transport { display:flex; align-items:center; gap:.9rem; background:#191d25; border:1px solid #2c313c;
-               border-radius:10px; padding:.8rem 1rem; }
+  .transport { display:flex; align-items:center; gap:.7rem; background:#191d25; border:1px solid #2c313c;
+               border-radius:10px; padding:.8rem 1rem; flex-wrap:wrap; }
   .transport button { border:1px solid #3a4150; background:#20242e; color:#e6e9ef; font-size:1rem;
                       width:44px; height:38px; border-radius:7px; cursor:pointer; }
-  #seek { flex:1; accent-color:#e05545; }
+  .transport button.small { width:auto; font-size:.78rem; padding:0 .6rem; }
+  .transport button.on-loop { background:#20452a; border-color:#2f6a3d; }
+  #seek { flex:1; min-width:180px; accent-color:#e05545; }
   #clock { font-variant-numeric:tabular-nums; color:#8b93a3; font-size:.85rem; min-width:6.5rem; text-align:right; }
+  #speed { background:#20242e; color:#e6e9ef; border:1px solid #3a4150; border-radius:6px; padding:.35rem .4rem; }
+  #loopinfo { color:#6fae7d; font-size:.78rem; min-width:7rem; font-variant-numeric:tabular-nums; }
 
   .downloads { display:flex; gap:.7rem; flex-wrap:wrap; }
   .downloads a, .downloads button {
@@ -53,6 +57,12 @@
   .downloads a:hover, .downloads button:hover { border-color:#e05545; }
   .downloads .primary { background:#e05545; border-color:#e05545; color:#fff; }
   #warnings { color:#8f7a1e; font-size:.8rem; white-space:pre-wrap; }
+
+  details.sheet { background:#191d25; border:1px solid #2c313c; border-radius:10px; padding:.6rem 1rem; }
+  details.sheet summary { cursor:pointer; color:#aeb6c4; font-size:.9rem; padding:.3rem 0; }
+  #sheetbox { background:#f5f2ea; border-radius:8px; margin-top:.7rem; max-height:70vh; overflow:auto; padding:.7rem; }
+  #sheetbox svg { max-width:100%; height:auto; display:block; margin:0 auto .6rem; }
+  #sheetbox object { width:100%; height:65vh; border:0; }
 </style>
 </head>
 <body>
@@ -73,9 +83,23 @@
     <div class="transport">
       <button id="play" title="play/pause">&#9654;</button>
       <button id="stop" title="back to start">&#9632;</button>
+      <select id="speed" title="playback speed (pitch preserved)">
+        <option value="0.5">50%</option><option value="0.6">60%</option>
+        <option value="0.7">70%</option><option value="0.75">75%</option>
+        <option value="0.85">85%</option><option value="1" selected>100%</option>
+      </select>
+      <button class="small" id="setA" title="loop start = now">A</button>
+      <button class="small" id="setB" title="loop end = now">B</button>
+      <button class="small" id="clearAB" title="clear loop">&times;</button>
+      <span id="loopinfo"></span>
       <input type="range" id="seek" min="0" max="1000" value="0">
       <span id="clock">0:00 / 0:00</span>
     </div>
+
+    <details class="sheet" id="sheetpanel" style="display:none">
+      <summary>Drum sheet music</summary>
+      <div id="sheetbox"></div>
+    </details>
 
     <div class="downloads" id="downloads">
       <button class="primary" id="dlmix">&#8681; Download mix (your levels)</button>
@@ -89,9 +113,10 @@ const NICE = { drums:'Drums', bass:'Bass', other:'Guitars+', vocals:'Vocals' };
 
 const state = {
   ctx: null, master: null,
-  stems: [],            // {name, buffer, gainNode, fader:0..1, muted:false, solo:false}
+  stems: [],          // {name, el, gainNode, buffer, fader, muted, solo}
   duration: 0,
-  playing: false, sources: [], startedAt: 0, offset: 0,
+  playing: false,
+  loopA: null, loopB: null,
 };
 
 // ---------- job polling ----------
@@ -115,22 +140,29 @@ async function poll() {
 poll();
 
 // ---------- stem loading ----------
+// Playback uses <audio> elements (playbackRate + preservesPitch = native
+// pitch-preserved slow-down); the decoded buffers are kept ONLY for the
+// offline mix render, which always happens at 100% speed.
 async function loadStems(job) {
   document.getElementById('stage').textContent = 'loading stems into the mixer…';
   state.ctx = new (window.AudioContext || window.webkitAudioContext)();
   state.master = state.ctx.createGain();
   state.master.connect(state.ctx.destination);
 
-  const names = Object.keys(job.stems);
-  for (const name of names) {
-    const buf = await fetch(job.stems[name]).then(r => r.arrayBuffer());
-    const audio = await state.ctx.decodeAudioData(buf);
-    const g = state.ctx.createGain();
-    g.connect(state.master);
-    state.stems.push({ name, buffer: audio, gainNode: g, fader: 1.0, muted: false, solo: false });
-    state.duration = Math.max(state.duration, audio.duration);
+  for (const name of Object.keys(job.stems)) {
+    const ab = await fetch(job.stems[name]).then(r => r.arrayBuffer());
+    const buffer = await state.ctx.decodeAudioData(ab.slice(0));
+    const el = new Audio(URL.createObjectURL(new Blob([ab], { type: 'audio/wav' })));
+    el.preload = 'auto';
+    el.preservesPitch = true;
+    const srcNode = state.ctx.createMediaElementSource(el);
+    const gainNode = state.ctx.createGain();
+    srcNode.connect(gainNode).connect(state.master);
+    state.stems.push({ name, el, gainNode, buffer, fader: 1.0, muted: false, solo: false });
+    state.duration = Math.max(state.duration, buffer.duration);
   }
   buildBoard(job);
+  buildSheet(job);
   document.getElementById('processing').style.display = 'none';
   document.getElementById('console').style.display = 'flex';
   updateClock();
@@ -165,8 +197,7 @@ function buildBoard(job) {
     solo.onclick = () => { s.solo = !s.solo; solo.classList.toggle('on-solo', s.solo); applyGains(); };
     board.appendChild(strip(NICE[s.name] || s.name, v => { s.fader = v; applyGains(); }, [mute, solo]));
   }
-  const masterStrip = strip('<span class="master-name">Master</span>', v => { state.master.gain.value = v; });
-  board.appendChild(masterStrip);
+  board.appendChild(strip('<span class="master-name">Master</span>', v => { state.master.gain.value = v; }));
 
   const dls = document.getElementById('downloads');
   for (const d of Object.values(job.downloads || {})) {
@@ -179,52 +210,70 @@ function buildBoard(job) {
     document.getElementById('warnings').textContent = 'Notes:\n' + job.warnings.join('\n');
 }
 
+async function buildSheet(job) {
+  if (!job.sheet_view) return;
+  const panel = document.getElementById('sheetpanel');
+  const box = document.getElementById('sheetbox');
+  panel.style.display = 'block';
+  if (job.sheet_view.kind === 'svg') {
+    try {
+      const res = await fetch(job.sheet_view.url);
+      if (!res.ok) throw new Error(res.statusText);
+      box.innerHTML = await res.text();
+    } catch (e) {
+      panel.style.display = 'none';
+    }
+  } else {
+    box.innerHTML = `<object data="${job.sheet_view.url}" type="application/pdf">
+      <p style="color:#333">PDF preview unavailable — use the download button below.</p></object>`;
+  }
+}
+
 function effectiveGain(s) {
   const anySolo = state.stems.some(x => x.solo);
   if (s.muted) return 0;
   if (anySolo && !s.solo) return 0;
   return s.fader;
 }
-function applyGains() {
-  for (const s of state.stems) s.gainNode.gain.value = effectiveGain(s);
-}
+function applyGains() { for (const s of state.stems) s.gainNode.gain.value = effectiveGain(s); }
 
-// ---------- transport ----------
+// ---------- transport (element-based) ----------
+const masterEl = () => state.stems[0].el;
+
 function play() {
   if (state.playing) { pause(); return; }
   state.ctx.resume();
   applyGains();
-  state.sources = state.stems.map(s => {
-    const src = state.ctx.createBufferSource();
-    src.buffer = s.buffer;
-    src.connect(s.gainNode);
-    src.start(0, Math.min(state.offset, s.buffer.duration));
-    return src;
-  });
-  state.startedAt = state.ctx.currentTime;
+  const rate = parseFloat(document.getElementById('speed').value);
+  for (const s of state.stems) { s.el.playbackRate = rate; s.el.preservesPitch = true; s.el.play(); }
   state.playing = true;
   document.getElementById('play').innerHTML = '&#10073;&#10073;';
   tick();
 }
 function pause() {
-  state.offset = Math.min(state.duration, state.offset + state.ctx.currentTime - state.startedAt);
-  stopSources();
-}
-function stopAll() { state.offset = 0; stopSources(); updateClock(); }
-function stopSources() {
-  state.sources.forEach(s => { try { s.stop(); } catch (e) {} });
-  state.sources = [];
+  for (const s of state.stems) s.el.pause();
   state.playing = false;
   document.getElementById('play').innerHTML = '&#9654;';
 }
-function currentTime() {
-  return state.playing
-    ? Math.min(state.duration, state.offset + state.ctx.currentTime - state.startedAt)
-    : state.offset;
+function stopAll() { pause(); seekTo(0); }
+function seekTo(t) {
+  t = Math.max(0, Math.min(t, state.duration - 0.02));
+  for (const s of state.stems) s.el.currentTime = Math.min(t, s.el.duration || t);
+  updateClock();
 }
+function currentTime() { return state.stems.length ? masterEl().currentTime : 0; }
+
 function tick() {
   if (!state.playing) return;
-  if (currentTime() >= state.duration) { stopAll(); return; }
+  const t = currentTime();
+  // A-B loop
+  if (state.loopB !== null && t >= state.loopB) { seekTo(state.loopA ?? 0); }
+  // keep the elements sample-close (they can drift a little at slow rates)
+  for (const s of state.stems.slice(1)) {
+    if (Math.abs(s.el.currentTime - masterEl().currentTime) > 0.06)
+      s.el.currentTime = masterEl().currentTime;
+  }
+  if (t >= state.duration - 0.03 && state.loopB === null) { stopAll(); return; }
   updateClock();
   requestAnimationFrame(tick);
 }
@@ -239,17 +288,44 @@ const seek = document.getElementById('seek');
 seek.addEventListener('pointerdown', () => { seekDragging = true; });
 seek.addEventListener('change', () => {
   seekDragging = false;
-  const t = (seek.value / 1000) * state.duration;
-  const wasPlaying = state.playing;
-  if (state.playing) stopSources();
-  state.offset = t;
-  updateClock();
-  if (wasPlaying) play();
+  seekTo((seek.value / 1000) * state.duration);
 });
 document.getElementById('play').onclick = play;
 document.getElementById('stop').onclick = stopAll;
+document.getElementById('speed').addEventListener('change', () => {
+  const rate = parseFloat(document.getElementById('speed').value);
+  for (const s of state.stems) { s.el.playbackRate = rate; s.el.preservesPitch = true; }
+});
 
-// ---------- download the adjusted mix (rendered in-browser) ----------
+// ---------- A-B loop ----------
+function loopInfo() {
+  const el = document.getElementById('loopinfo');
+  if (state.loopA === null && state.loopB === null) { el.textContent = ''; return; }
+  const a = state.loopA !== null ? fmt(state.loopA) : '·';
+  const b = state.loopB !== null ? fmt(state.loopB) : '·';
+  el.textContent = `loop ${a} – ${b}`;
+}
+document.getElementById('setA').onclick = (e) => {
+  state.loopA = currentTime();
+  if (state.loopB !== null && state.loopB <= state.loopA) state.loopB = null;
+  e.target.classList.add('on-loop');
+  loopInfo();
+};
+document.getElementById('setB').onclick = (e) => {
+  const t = currentTime();
+  if (state.loopA !== null && t <= state.loopA) return;  // B must come after A
+  state.loopB = t;
+  e.target.classList.add('on-loop');
+  loopInfo();
+};
+document.getElementById('clearAB').onclick = () => {
+  state.loopA = state.loopB = null;
+  document.getElementById('setA').classList.remove('on-loop');
+  document.getElementById('setB').classList.remove('on-loop');
+  loopInfo();
+};
+
+// ---------- download the adjusted mix (rendered in-browser at 100% speed) ----------
 document.getElementById('dlmix').onclick = async () => {
   const btn = document.getElementById('dlmix');
   btn.disabled = true;

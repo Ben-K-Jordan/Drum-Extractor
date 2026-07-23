@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # Deliberately NOT the heavy ML extras (torch/demucs/basic-pitch):
+      # tests for absent optional deps skip cleanly by design, so this runs
+      # the whole pure-Python + audio-DSP + notation + web surface.
+      - run: pip install -e ".[drums,notation,web]" pytest
+      - run: pytest -q
+
+  accuracy:
+    name: Transcription accuracy gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[drums]"
+      # Build the ground-truth groove bank and score the onset backend on it.
+      # The gate is set below the measured aggregate (0.73 at tuning time) so
+      # normal jitter passes but a real accuracy regression fails the build.
+      - run: drum-extractor bank-build -o bank --jitter-ms 5 --vel-jitter 8
+      - run: drum-extractor bank-eval bank --backend onset
+      - name: Enforce accuracy floor
+        run: |
+          python - <<'PY'
+          import json, sys
+          f = json.load(open("bank/report.json"))["aggregate"]["overall"]["f"]
+          floor = 0.65
+          print(f"aggregate F = {f:.3f} (floor {floor})")
+          sys.exit(0 if f >= floor else 1)
+          PY

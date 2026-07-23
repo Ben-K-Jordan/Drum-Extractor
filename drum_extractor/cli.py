@@ -94,7 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # bank-build / bank-eval — ground-truth accuracy bank
     bb = sub.add_parser("bank-build", help="Build the ground-truth groove bank (synthesized audio + known hits)")
-    _add_common(bb)
+    # Own output arg (not _add_common): its default is ./bank, and a sentinel
+    # comparison would silently redirect an explicit `-o output` to ./bank.
+    bb.add_argument("-o", "--output", default="bank", help="Bank directory (default: ./bank)")
+    bb.add_argument("-v", "--verbose", action="store_true", help="Verbose (debug) logging")
     bb.add_argument("--presets", default=None, help="Comma-separated preset names (default: all)")
     bb.add_argument("--bars", type=int, default=4)
     bb.add_argument("--jitter-ms", type=float, default=0.0, help="Humanize onset timing (std dev, ms)")
@@ -206,7 +209,7 @@ def _cmd_bank_build(args) -> int:
 
     presets = [p.strip() for p in args.presets.split(",")] if args.presets else None
     items = build_bank(
-        args.output if args.output != "output" else "bank",
+        args.output,
         presets=presets,
         bars=args.bars,
         jitter_ms=args.jitter_ms,
@@ -231,6 +234,16 @@ def _cmd_bank_eval(args) -> int:
         DrumTranscriptionConfig(backend=args.backend, boost_double_kick=args.boost_double_kick),
         tolerance=args.tolerance_ms / 1000.0,
     )
+    # Record what produced these numbers, so successive runs with different
+    # backends/boosters can't be mistaken for one another.
+    import time as _time
+
+    report["evaluated_with"] = {
+        "backend": args.backend,
+        "boost_double_kick": args.boost_double_kick,
+        "tolerance_ms": args.tolerance_ms,
+        "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
     print(format_report(report))
     out = Path(args.bank_dir) / "report.json"
     out.write_text(_json.dumps(report, indent=2))

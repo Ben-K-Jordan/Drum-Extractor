@@ -255,7 +255,9 @@ def build_bank(
             # The pristine grid hits (exact bar/beat) are the reference chart.
             ref = Transcription(drum_hits=hits, tempo=bpm, time_signature=(4, 4))
             notate_drums(ref, item_dir, NotationConfig(title=f"Reference: {name}", render_pdf=False), QuantizeConfig())
-            (item_dir / "drums.musicxml").rename(item_dir / "reference.musicxml")
+            # replace(), not rename(): overwrites an existing reference on re-build
+            # (rename raises FileExistsError on Windows).
+            (item_dir / "drums.musicxml").replace(item_dir / "reference.musicxml")
         (item_dir / "meta.json").write_text(
             json.dumps(
                 {"preset": name, "bpm": bpm, "bars": bars, "jitter_ms": jitter_ms,
@@ -295,17 +297,23 @@ class FamilyScore:
 
 
 def _match_count(ref: list[float], est: list[float], tol: float) -> int:
-    """Greedy two-pointer onset matching (each ref matches at most one est)."""
+    """Greedy two-pointer onset matching (each ref matches at most one est).
+
+    All three branches share ONE difference value: recomputing ``ref[i] - tol``
+    in the discard test rounds differently from ``abs(ref[i]-est[j])`` and could
+    discard a reference that had an exact match sitting right there.
+    """
     ref, est = sorted(ref), sorted(est)
     i = j = tp = 0
     while i < len(ref) and j < len(est):
-        if abs(ref[i] - est[j]) <= tol:
+        d = ref[i] - est[j]
+        if abs(d) <= tol:
             tp += 1
             i += 1
             j += 1
-        elif est[j] < ref[i] - tol:
+        elif d > tol:  # estimate too early for this reference
             j += 1
-        else:
+        else:  # estimate too late — this reference is unmatched
             i += 1
     return tp
 

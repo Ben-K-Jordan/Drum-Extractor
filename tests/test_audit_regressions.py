@@ -71,33 +71,105 @@ def test_m4_non_quarter_meter_measure_count():
 
 # --- M1: onset classifier must not fabricate absent instruments -----------------------
 
-def test_m1_no_phantom_kicks_on_hihat_only():
-    pytest.importorskip("librosa")
-    pytest.importorskip("soundfile")
+def _burst_track(sig, sr=44100, hits=16, spacing=0.25):
+    """Repeat a one-shot sound on a grid to make a stem-like track."""
     import numpy as np
+
+    n = int((hits * spacing + 0.5) * sr)
+    audio = np.zeros(n)
+    for k in range(hits):
+        t0 = int(k * spacing * sr)
+        j = min(t0 + len(sig), n)
+        audio[t0:j] += sig[: j - t0]
+    return (audio / (np.abs(audio).max() + 1e-9) * 0.9).astype(np.float32)
+
+
+def _bp(noise, sr, lo, hi):
+    import numpy as np
+
+    spec = np.fft.rfft(noise)
+    f = np.fft.rfftfreq(len(noise), 1 / sr)
+    spec[(f < lo) | (f > hi)] = 0
+    out = np.fft.irfft(spec, n=len(noise))
+    return out / (np.abs(out).max() + 1e-9)
+
+
+def _classify_one_shot(sig, sr=44100):
+    import tempfile, os
+
     import soundfile as sf
     from drum_extractor.drums import _transcribe_onsets
 
-    sr = 44100
-    rng = np.random.default_rng(0)
-    n = int(4 * sr)
-    audio = np.zeros(n)
-    for k in range(16):  # hi-hat-only: high-frequency bursts, no kick/snare energy
-        t0 = int(k * 0.25 * sr)
-        tt = np.linspace(0, 0.05, int(0.05 * sr))
-        hh = 0.3 * np.exp(-tt * 80) * np.diff(rng.standard_normal(len(tt)), prepend=0)
-        audio[t0 : t0 + len(hh)] += hh
-    audio = audio / (np.abs(audio).max() + 1e-9) * 0.9
-
-    import tempfile, os
     with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "hh.wav")
-        sf.write(p, audio.astype(np.float32), sr)
+        p = os.path.join(d, "x.wav")
+        sf.write(p, _burst_track(sig, sr), sr)
         hits = _transcribe_onsets(p, DrumTranscriptionConfig())
-    kinds = {h.instrument for h in hits}
-    assert "kick" not in kinds, "fabricated phantom kicks on hi-hat-only audio"
-    assert "snare" not in kinds, "fabricated phantom snares on hi-hat-only audio"
+    return {h.instrument for h in hits}
+
+
+def test_m1_no_phantom_kicks_on_hihat_only():
+    """Original M1 case: difference-noise hi-hat must not fabricate kick/snare."""
+    pytest.importorskip("librosa")
+    pytest.importorskip("soundfile")
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    sr = 44100
+    tt = np.linspace(0, 0.05, int(0.05 * sr))
+    hh = 0.3 * np.exp(-tt * 80) * np.diff(rng.standard_normal(len(tt)), prepend=0)
+    kinds = _classify_one_shot(hh)
+    assert "kick" not in kinds and "snare" not in kinds
     assert "hihat_closed" in kinds
+
+
+# The next three use REALISTIC spectra deliberately different from the sonify
+# synth voices (held-out), because thresholds tuned only on the bank's own
+# synthesizer passed the old test vacuously while phantom-firing on real-world
+# spectra (found by the adversarial verification round).
+
+def test_realistic_hat_with_mid_body_stays_clean():
+    pytest.importorskip("librosa")
+    pytest.importorskip("soundfile")
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    sr = 44100
+    env = np.exp(-np.linspace(0, 1, 4410) * 18)
+    hat = _bp(rng.standard_normal(4410), sr, 3000, 12000) * env  # body below 5 kHz included
+    kinds = _classify_one_shot(hat)
+    assert kinds == {"hihat_closed"}, f"phantoms on realistic hat: {kinds}"
+
+
+def test_realistic_snare_with_body_no_phantom_kick():
+    pytest.importorskip("librosa")
+    pytest.importorskip("soundfile")
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    sr = 44100
+    t = np.arange(4410) / sr
+    env = np.exp(-t * 18)
+    snare = (0.5 * np.sin(2 * np.pi * 185 * t) + 0.5 * _bp(rng.standard_normal(4410), sr, 100, 8000)) * env
+    kinds = _classify_one_shot(snare)
+    assert "snare" in kinds
+    assert "kick" not in kinds, "phantom kick on a snare with a low body"
+
+
+def test_realistic_kick_with_click_no_phantom_snare():
+    pytest.importorskip("librosa")
+    pytest.importorskip("soundfile")
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    sr = 44100
+    t = np.arange(4410) / sr
+    env = np.exp(-t * 18)
+    click = np.zeros(4410)
+    click[:220] = _bp(rng.standard_normal(4410), sr, 3000, 6000)[:220]
+    kick = (np.sin(2 * np.pi * 50 * t * (1 + 1.2 * np.exp(-t * 25))) + 0.30 * click) * env
+    kinds = _classify_one_shot(kick)
+    assert "kick" in kinds
+    assert "snare" not in kinds, "phantom snare on a kick with beater click"
 
 
 # --- H3: CREPE refinement must track pitch, not collapse below its lowest bin ---------

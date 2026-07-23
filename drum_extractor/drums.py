@@ -165,15 +165,20 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
 
     hits: list[DrumHit] = []
     vel = config.default_velocity
-    # A band fires only if it holds a meaningful SHARE of THIS onset's energy,
-    # not merely because it clears the corpus median (which ~half of onsets do
-    # by definition, fabricating phantom kicks/snares on cymbal-only material).
-    # Fractions are relative to each onset's own total, so an absent instrument
-    # contributes negligible share and does not fire. Thresholds are config
-    # fields, grid-searched against the ground-truth groove bank.
-    KICK_SHARE = config.onset_kick_share
-    SNARE_SHARE = config.onset_snare_share
-    HIHAT_SHARE = config.onset_hihat_share
+    # Dominance-based classification: the strongest band ALWAYS fires (every
+    # onset gets exactly one primary instrument), and a non-dominant band fires
+    # only if its energy share clears its own (deliberately high) secondary
+    # threshold — i.e. only when the onset genuinely looks like two instruments
+    # struck together (kick+hat, snare+crash). Firing every band that clears a
+    # low absolute share stamps a phantom second instrument on nearly every
+    # onset, because real drums spread energy across bands (a snare has body
+    # AND wires; a kick has a beater click).
+    band_instr = {"low": KICK, "mid": SNARE, "high": HIHAT_CLOSED}
+    secondary = {
+        "low": config.onset_kick_share,
+        "mid": config.onset_snare_share,
+        "high": config.onset_hihat_share,
+    }
     for t in onset_times:
         frame = librosa.time_to_frames(t, sr=sr, hop_length=512)
         frame = int(min(max(frame, 0), stft.shape[1] - 1))
@@ -182,23 +187,13 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
         e_mid = float(window[mid].sum())
         e_high = float(window[high].sum())
         total = e_low + e_mid + e_high + 1e-12
-        f_low, f_mid, f_high = e_low / total, e_mid / total, e_high / total
+        shares = {"low": e_low / total, "mid": e_mid / total, "high": e_high / total}
 
-        fired = False
-        if f_low >= KICK_SHARE:
-            hits.append(DrumHit(time=float(t), instrument=KICK, velocity=vel))
-            fired = True
-        if f_high >= HIHAT_SHARE:
-            hits.append(DrumHit(time=float(t), instrument=HIHAT_CLOSED, velocity=vel))
-            fired = True
-        if f_mid >= SNARE_SHARE:
-            hits.append(DrumHit(time=float(t), instrument=SNARE, velocity=vel))
-            fired = True
-        if not fired:
-            # No band dominant enough; assign the single strongest band so the
-            # onset isn't lost, rather than defaulting to a phantom snare.
-            dominant = max((f_low, KICK), (f_mid, SNARE), (f_high, HIHAT_CLOSED), key=lambda x: x[0])[1]
-            hits.append(DrumHit(time=float(t), instrument=dominant, velocity=vel))
+        dominant = max(shares, key=shares.get)  # type: ignore[arg-type]
+        hits.append(DrumHit(time=float(t), instrument=band_instr[dominant], velocity=vel))
+        for band, share in shares.items():
+            if band != dominant and share >= secondary[band]:
+                hits.append(DrumHit(time=float(t), instrument=band_instr[band], velocity=vel))
 
     hits.sort(key=lambda h: h.time)
     log.info("Onset fallback: %d onsets -> %d hits", len(onset_times), len(hits))

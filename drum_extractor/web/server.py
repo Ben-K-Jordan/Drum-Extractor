@@ -72,7 +72,52 @@ class Job:
                 downloads["tab"] = {"url": f"/download/{self.id}/tab", "label": "Bass tab"}
             d["downloads"] = downloads
             d["warnings"] = self.result.warnings
+            # Inline sheet preview: SVG via verovio when available, else the PDF.
+            if self.result.musicxml and _verovio_available():
+                d["sheet_view"] = {"kind": "svg", "url": f"/sheet/{self.id}.svg"}
+            elif self.result.pdf:
+                d["sheet_view"] = {"kind": "pdf", "url": f"/sheet/{self.id}.pdf"}
         return d
+
+
+# verovio's toolkit only finds its font resources when CONSTRUCTED on the main
+# thread, but Flask handlers run on worker threads — so one shared toolkit is
+# built eagerly in create_app() (main thread) and reused under a lock (the
+# toolkit is stateful and not thread-safe).
+_VEROVIO: dict = {"tk": None, "lock": threading.Lock()}
+
+
+def _init_verovio() -> None:
+    if _VEROVIO["tk"] is not None:
+        return
+    try:
+        import verovio
+
+        _VEROVIO["tk"] = verovio.toolkit()
+        log.info("verovio ready — inline sheet previews enabled")
+    except Exception as exc:
+        log.info("verovio unavailable (%s) — sheet preview falls back to PDF/downloads", exc)
+
+
+def _verovio_available() -> bool:
+    return _VEROVIO["tk"] is not None
+
+
+def render_sheet_svg(musicxml_path: Path, max_pages: int = 20) -> str | None:
+    """Engrave MusicXML to stacked SVG pages with verovio. None on failure."""
+    tk = _VEROVIO["tk"]
+    if tk is None:
+        return None
+    try:
+        with _VEROVIO["lock"]:
+            tk.setOptions({"scale": 38, "adjustPageHeight": True, "pageWidth": 1900})
+            if not tk.loadData(musicxml_path.read_text()):
+                return None
+            pages = min(tk.getPageCount(), max_pages)
+            return "\n".join(tk.renderToSVG(p) for p in range(1, pages + 1))
+    except Exception as exc:  # engraving must never break the mixer
+        log.warning("verovio rendering failed: %s", exc)
+        return None
 
 
 class JobStore:
@@ -123,6 +168,7 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
 
     output_dir = Path(output_dir)
     make_config = config_factory or default_config_factory(output_dir)
+    _init_verovio()  # must happen on the main thread (see note above)
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # accept long WAV recordings
     store = JobStore()
@@ -179,6 +225,23 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
         if path is None or not Path(path).exists():
             abort(404)
         return send_file(Path(path).resolve(), mimetype="audio/wav", conditional=True)
+
+    @app.get("/sheet/<job_id>.svg")
+    def sheet_svg(job_id: str):
+        job = store.get(job_id)
+        if job is None or job.result is None or not job.result.musicxml:
+            abort(404)
+        svg = render_sheet_svg(Path(job.result.musicxml))
+        if svg is None:
+            abort(404)
+        return app.response_class(svg, mimetype="image/svg+xml")
+
+    @app.get("/sheet/<job_id>.pdf")
+    def sheet_pdf(job_id: str):
+        job = store.get(job_id)
+        if job is None or job.result is None or not job.result.pdf:
+            abort(404)
+        return send_file(Path(job.result.pdf).resolve(), mimetype="application/pdf", conditional=True)
 
     @app.get("/download/<job_id>/<kind>")
     def download(job_id: str, kind: str):

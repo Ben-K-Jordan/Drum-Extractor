@@ -95,12 +95,21 @@ Drop a song or recording on the page; when separation finishes you land on a
 **mixer board**: one fader per stem (drums, bass, vocals, guitars+), with
 mute/solo per channel and a master fader. From there:
 
+- **Practice controls** — playback speed 50–100% with pitch preserved
+  (HTMLMediaElement `preservesPitch`), and an **A–B section loop** for
+  drilling a riff or fill.
+- **Sheet music inline** — the drum chart renders right on the page
+  (engraved to SVG by verovio; falls back to an embedded PDF when MuseScore
+  produced one).
 - **Download mix (your levels)** — rendered *in the browser* at exactly your
   fader settings (Web Audio OfflineAudioContext → WAV), no re-processing.
 - **Download the drum sheet** (PDF when MuseScore is installed, else MusicXML),
   the **drum MIDI**, and the **bass tab**.
 
 The server binds to localhost only by default and runs everything locally.
+CI (GitHub Actions) runs the full test suite **and an accuracy gate**: the
+groove bank is rebuilt and scored on every push, failing the build if
+aggregate F drops below 0.65.
 
 ### Command line
 
@@ -284,19 +293,25 @@ Why a bank instead of training data: training-scale corpora already exist
 *benchmark* (measure → tune → regression-test accuracy). Every item is also an
 (audio, ground-truth MIDI) pair, i.e. fine-tuning-ready if we ever train.
 
-It paid off immediately — F-scores of the librosa **onset fallback** (±50 ms):
+It paid off immediately — the first run exposed that the onset fallback's
+intuition-set thresholds could *never* fire on a snare (F=0.00), and a first
+naive re-tune then overfit the synthesizer's spectra (caught by adversarial
+verification). The shipped setup is the robust version: **realistic synth
+voices** (band-limited hats/cymbals, snare with body+wires), a
+**dominance-based classifier** (strongest band always fires; a second
+instrument only on a high secondary share), and thresholds grid-searched
+**under hard constraints from held-out realistic proxies** with a safety
+margin. Onset-fallback F-scores (±50 ms):
 
 | | cymbals | hihat | kick | snare | toms | overall |
 |---|---|---|---|---|---|---|
 | intuition-set thresholds | 0.00 | 0.82 | 0.12 | 0.00 | 0.00 | **0.46** |
-| bank-tuned thresholds | 0.00 | 0.83 | 0.62 | 0.75 | 0.00 | **0.71** |
+| shipped (robust-tuned) | 0.00 | 0.86 | 0.71 | 0.71 | 0.00 | **0.73** |
 
-(The snare threshold was flat-out wrong before — the bank exposed it in one
-run, and a grid search over the bank picked the shipped defaults.) It also
-validated the double-kick booster with numbers: on 200 BPM sixteenth
-double-kick, kick recall goes **0.30 → 1.00** with `--boost-double-kick` — but
-aggregate F *drops* on other material, so enable it for double-kick songs
-specifically, not globally.
+The bank also validated the double-kick booster with numbers: on 200 BPM
+sixteenth double-kick, kick recall goes **0.67 → 0.98** with
+`--boost-double-kick` — but aggregate F *drops* on other material, so enable
+it for double-kick songs specifically, not globally.
 
 Cymbal/tom identity remains the fallback's blind spot (F=0.00) — consistent
 with the research: that's what ADTOF is for. Run `bank-eval --backend adtof`

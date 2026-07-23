@@ -46,7 +46,9 @@ notation = ["music21>=9.1.0"]
 ensemble = ["audio-separator>=0.17"]
 
 # Local web UI: drop page -> stem mixer -> downloads (`drum-extractor web`).
-web = ["flask>=3.0"]
+# verovio engraves the drum sheet to SVG for the inline preview on the mixer
+# page (no MuseScore needed); the UI degrades gracefully without it.
+web = ["flask>=3.0", "verovio>=4.0"]
 
 # The default drum backend. There is NO `pip install adtof` that ships a CLI —
 # ADTOF-pytorch provides the `adtof` command. Installed from git, so kept out of

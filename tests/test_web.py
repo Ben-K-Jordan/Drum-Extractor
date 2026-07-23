@@ -17,6 +17,18 @@ from drum_extractor.events import Stems  # noqa: E402
 from drum_extractor.pipeline import PipelineResult  # noqa: E402
 from drum_extractor.web import server as web_server  # noqa: E402
 
+MINIMAL_MUSICXML = """<?xml version="1.0"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Drums</part-name></score-part></part-list>
+  <part id="P1"><measure number="1">
+    <attributes><divisions>4</divisions>
+      <time><beats>4</beats><beat-type>4</beat-type></time>
+      <clef><sign>percussion</sign></clef></attributes>
+    <note><unpitched><display-step>C</display-step><display-octave>5</display-octave></unpitched>
+      <duration>4</duration><type>quarter</type></note>
+  </measure></part>
+</score-partwise>"""
+
 
 @pytest.fixture()
 def app(tmp_path, monkeypatch):
@@ -31,7 +43,7 @@ def app(tmp_path, monkeypatch):
             p.write_bytes(b"RIFFfake-wav-payload")
             setattr(result.stems, name, p)
         mx = Path(config.output_dir) / "drums.musicxml"
-        mx.write_text("<score-partwise/>")
+        mx.write_text(MINIMAL_MUSICXML)
         result.musicxml = mx
         mid = Path(config.output_dir) / "drums.mid"
         mid.write_bytes(b"MThd fake")
@@ -114,6 +126,26 @@ def test_unknown_ids_and_names_404(app):
     assert client.get(f"/stems/{job_id}/..%2f..%2fsecrets").status_code == 404
     assert client.get(f"/download/{job_id}/tab").status_code == 404  # stub made no tab
     assert client.get(f"/download/{job_id}/passwd").status_code == 404
+
+
+def test_sheet_endpoints(app):
+    client = app.test_client()
+    job_id = _upload(client).get_json()["id"]
+    job = client.get(f"/job/{job_id}").get_json()
+
+    if web_server._verovio_available():
+        # SVG preview advertised and rendered from the MusicXML.
+        assert job["sheet_view"]["kind"] == "svg"
+        svg = client.get(f"/sheet/{job_id}.svg")
+        assert svg.status_code == 200
+        assert svg.mimetype == "image/svg+xml"
+        assert b"<svg" in svg.data
+    else:
+        # No verovio and the stub has no PDF -> no preview advertised.
+        assert "sheet_view" not in job
+    # No PDF in the stub, so the pdf variant must 404 either way.
+    assert client.get(f"/sheet/{job_id}.pdf").status_code == 404
+    assert client.get("/sheet/nope.svg").status_code == 404
 
 
 def test_pipeline_failure_reported(app, monkeypatch):
