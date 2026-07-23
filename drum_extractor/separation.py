@@ -64,7 +64,7 @@ def separate(audio_path: str | Path, out_dir: str | Path, config: SeparationConf
 
 def _separate_api(audio_path: Path, out_dir: Path, config: SeparationConfig, device: str) -> Stems:
     try:
-        from demucs.api import Separator, save_audio  # type: ignore
+        from demucs.api import Separator  # type: ignore
     except ModuleNotFoundError as exc:
         raise MissingDependencyError("Source separation", "demucs", extra="separation") from exc
 
@@ -76,17 +76,28 @@ def _separate_api(audio_path: Path, out_dir: Path, config: SeparationConfig, dev
         jobs=config.jobs,
     )
     _origin, separated = separator.separate_audio_file(str(audio_path))
+    return _save_stems(separated, out_dir, config, separator.samplerate)
 
+
+def _save_stems(separated: dict, out_dir: Path, config: SeparationConfig, samplerate: int) -> Stems:
+    """Write the requested stems from a Demucs ``{name: tensor}`` dict to disk.
+
+    Split out from :func:`_separate_api` so the tensor->file plumbing can be
+    tested against the real ``demucs.api.save_audio`` without downloading model
+    weights.
+    """
+    from demucs.api import save_audio  # type: ignore
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     stems = Stems()
     ext = "mp3" if config.mp3 else "wav"
     for name, source in separated.items():
         if name not in config.stems:
             continue
         stem_path = out_dir / f"{name}.{ext}"
-        save_kwargs = {}
-        if config.mp3:
-            save_kwargs.update(bitrate=config.mp3_bitrate)
-        save_audio(source, str(stem_path), samplerate=separator.samplerate, **save_kwargs)
+        save_kwargs = {"bitrate": config.mp3_bitrate} if config.mp3 else {}
+        save_audio(source, str(stem_path), samplerate=samplerate, **save_kwargs)
         setattr(stems, name, stem_path)
         log.info("  -> %s", stem_path)
     return stems

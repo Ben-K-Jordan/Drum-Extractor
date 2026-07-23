@@ -40,6 +40,7 @@ def quantize(transcription: Transcription, audio_path: str | Path, config: Quant
     if grid:
         for hit in transcription.drum_hits:
             hit.time = _snap(hit.time, grid)
+        transcription.drum_hits = _dedupe_hits(transcription.drum_hits)
         _annotate_bar_beat(transcription, downbeats or beats, config)
     log.info("Quantized to 1/%d grid at %.1f BPM (%d beats, %d bars)", config.grid, tempo or 0.0, len(beats), len(downbeats))
     return transcription
@@ -74,6 +75,7 @@ def _detect_madmom(audio_path: Path, config: QuantizeConfig) -> tuple[float | No
 def _detect_librosa(audio_path: Path, config: QuantizeConfig) -> tuple[float | None, list[float], list[float]]:
     try:
         import librosa  # type: ignore
+        import numpy as np  # type: ignore
     except ModuleNotFoundError as exc:
         from .errors import MissingDependencyError
 
@@ -82,10 +84,28 @@ def _detect_librosa(audio_path: Path, config: QuantizeConfig) -> tuple[float | N
     y, sr = librosa.load(str(audio_path), sr=44100, mono=True)
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units="frames")
     beats = [float(t) for t in librosa.frames_to_time(beat_frames, sr=sr)]
-    tempo_val = config.fixed_tempo or (float(tempo) if tempo else _tempo_from_beats(beats))
+    # librosa >=0.10 returns tempo as a NumPy array; extract a scalar safely.
+    tempo_arr = np.atleast_1d(tempo)
+    tempo_scalar = float(tempo_arr.flat[0]) if tempo_arr.size and tempo_arr.flat[0] > 0 else None
+    tempo_val = config.fixed_tempo or tempo_scalar or _tempo_from_beats(beats)
     # librosa gives beats but not downbeats; assume bar starts every N beats.
     downbeats = beats[:: config.beats_per_bar] if beats else []
     return tempo_val, beats, downbeats
+
+
+def _dedupe_hits(hits: list) -> list:
+    """Collapse hits with the same instrument at the same (snapped) time.
+
+    After quantization two nearby onsets can land on the same grid slot; without
+    this they'd produce doubled noteheads and doubled MIDI notes. Keeps the
+    loudest of each duplicate group.
+    """
+    best: dict[tuple[str, float], object] = {}
+    for h in hits:
+        key = (h.instrument, round(h.time, 4))
+        if key not in best or h.velocity > best[key].velocity:  # type: ignore[attr-defined]
+            best[key] = h
+    return sorted(best.values(), key=lambda h: (h.time, h.instrument))  # type: ignore[attr-defined]
 
 
 def _tempo_from_beats(beats: list[float]) -> float | None:

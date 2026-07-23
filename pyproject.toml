@@ -40,6 +40,11 @@ quantize = ["madmom>=0.16.1", "librosa>=0.10.0"]
 # MuseScore 4 app installed separately (its CLI, `mscore`, on PATH).
 notation = ["music21>=9.1.0"]
 
+# Phase 4 — ensemble a second drum model (RoFormer/SCNet/MDX) with Demucs to cut
+# distorted-guitar bleed on dense metal. The double-kick booster and sonification
+# aids need no extra install (they use scipy/librosa/soundfile from above).
+ensemble = ["audio-separator>=0.17"]
+
 # Everything except ADTOF (installed on its own) and madmom (optional, finicky).
 all = [
     "demucs>=4.0.0",

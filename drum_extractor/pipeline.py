@@ -31,6 +31,8 @@ class PipelineResult:
     bass_tab: Path | None = None
     musicxml: Path | None = None
     pdf: Path | None = None
+    drum_sonification: Path | None = None
+    onset_csv: Path | None = None
     warnings: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -43,6 +45,8 @@ class PipelineResult:
             ("bass tab", self.bass_tab),
             ("MusicXML", self.musicxml),
             ("drum sheet PDF", self.pdf),
+            ("drum sonified", self.drum_sonification),
+            ("onset CSV", self.onset_csv),
         ]:
             if value:
                 lines.append(f"  - {label:<14} {value}")
@@ -69,6 +73,10 @@ def run_pipeline(audio_path: str | Path, config: PipelineConfig | None = None) -
         # Allow re-running later stages on pre-existing stems.
         result.stems = _discover_existing_stems(song_dir / "stems")
 
+    # --- Phase 4: optional ensemble drum stem (cuts distorted-guitar bleed) ---
+    if config.separation.ensemble_drums_model and result.stems.drums:
+        _try(result, "ensemble drums", lambda: _do_ensemble(result, config, audio_path, song_dir))
+
     # --- Stage 2a: drum transcription ---
     if config.do_drum_transcription and result.stems.drums:
         _try(result, "drum transcription", lambda: _do_drums(result, config, song_dir))
@@ -89,6 +97,10 @@ def run_pipeline(audio_path: str | Path, config: PipelineConfig | None = None) -
     # --- Stage 4: notation ---
     if config.do_notation and result.transcription.drum_hits:
         _try(result, "notation", lambda: _do_notation(result, config, song_dir))
+
+    # --- Phase 4: correction aids (sonification + onset CSV) ---
+    if config.do_sonify and result.transcription.drum_hits:
+        _try(result, "sonification", lambda: _do_sonify(result, song_dir))
 
     _write_transcription_json(result.transcription, song_dir / "transcription.json")
     log.info("\n%s", result.summary())
@@ -149,6 +161,21 @@ def _do_notation(result: PipelineResult, config: PipelineConfig, song_dir: Path)
     out = notate_drums(result.transcription, song_dir, config.notation, config.quantize)
     result.musicxml = out.get("musicxml")
     result.pdf = out.get("pdf")
+
+
+def _do_ensemble(result: PipelineResult, config: PipelineConfig, audio_path: Path, song_dir: Path) -> None:
+    from .ensemble import ensemble_drums
+
+    result.stems.drums = ensemble_drums(
+        audio_path, result.stems.drums, song_dir / "stems", config.separation.ensemble_drums_model
+    )
+
+
+def _do_sonify(result: PipelineResult, song_dir: Path) -> None:
+    from .sonify import sonify_drums, write_onset_csv
+
+    result.drum_sonification = sonify_drums(result.transcription.drum_hits, song_dir / "drums_sonified.wav")
+    result.onset_csv = write_onset_csv(result.transcription.drum_hits, song_dir / "drum_onsets.csv")
 
 
 def _discover_existing_stems(stems_dir: Path) -> Stems:

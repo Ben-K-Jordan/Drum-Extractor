@@ -23,6 +23,10 @@ class SeparationConfig:
     mp3: bool = False  # write mp3 instead of wav
     mp3_bitrate: int = 320
     jobs: int = 0  # parallel jobs (0 = auto)
+    # Phase 4: blend a second drums model (an audio-separator model filename,
+    # e.g. a RoFormer/SCNet drum checkpoint) with Demucs to cut guitar bleed on
+    # dense metal. None = Demucs only. Requires `pip install audio-separator`.
+    ensemble_drums_model: str | None = None
 
 
 @dataclass
@@ -34,6 +38,9 @@ class DrumTranscriptionConfig:
     # point. ``{input}`` and ``{output}`` are substituted at call time.
     adtof_command: tuple[str, ...] = ("python", "-m", "adtof", "{input}", "{output}")
     default_velocity: int = 96
+    # Phase 4: recover fast double-bass the full-kit model merges, via a
+    # low-pass kick-band onset detector. Targets metal's biggest weak spot.
+    boost_double_kick: bool = False
 
 
 @dataclass
@@ -87,6 +94,9 @@ class PipelineConfig:
     do_bass_transcription: bool = True
     do_quantize: bool = True
     do_notation: bool = True
+    # Phase 4 correction aid: render the drum transcription back to audio (+ an
+    # onset CSV) so you can A/B it against the stem by ear.
+    do_sonify: bool = True
 
     def __post_init__(self) -> None:
         self.output_dir = Path(self.output_dir)

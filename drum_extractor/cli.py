@@ -53,6 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-quantize", action="store_true", help="Skip quantization")
     run.add_argument("--no-notation", action="store_true", help="Skip sheet-music generation")
     run.add_argument("--crepe", action="store_true", help="Octave-correct bass with torchcrepe")
+    run.add_argument("--boost-double-kick", action="store_true", help="Recover fast double-kick (metal)")
+    run.add_argument("--ensemble-model", default=None, help="audio-separator drum model to blend with Demucs")
+    run.add_argument("--no-sonify", action="store_true", help="Skip the by-ear correction audio + onset CSV")
 
     # separate — Stage 1 only
     sep = sub.add_parser("separate", help="Stage 1 only: isolate stems with Demucs")
@@ -89,13 +92,16 @@ def build_parser() -> argparse.ArgumentParser:
 def _cmd_run(args) -> int:
     config = PipelineConfig(
         output_dir=Path(args.output),
-        separation=SeparationConfig(model=args.model, device=args.device, shifts=args.shifts),
-        drums=DrumTranscriptionConfig(backend=args.drum_backend),
+        separation=SeparationConfig(
+            model=args.model, device=args.device, shifts=args.shifts, ensemble_drums_model=args.ensemble_model
+        ),
+        drums=DrumTranscriptionConfig(backend=args.drum_backend, boost_double_kick=args.boost_double_kick),
         bass=BassTranscriptionConfig(refine_with_crepe=args.crepe),
         quantize=QuantizeConfig(grid=args.grid),
         do_bass_transcription=not args.no_bass,
         do_quantize=not args.no_quantize,
         do_notation=not args.no_notation,
+        do_sonify=not args.no_sonify,
     )
     from .pipeline import run_pipeline
 

@@ -35,13 +35,20 @@ def transcribe_drums(drum_stem: str | Path, config: DrumTranscriptionConfig | No
         return []
     if config.backend == "adtof":
         try:
-            return _transcribe_adtof(drum_stem, config)
+            hits = _transcribe_adtof(drum_stem, config)
         except ExternalToolError as exc:
             log.warning("ADTOF backend failed (%s); falling back to librosa onset detection.", exc)
-            return _transcribe_onsets(drum_stem, config)
-    if config.backend == "onset":
-        return _transcribe_onsets(drum_stem, config)
-    raise ValueError(f"Unknown drum transcription backend: {config.backend!r}")
+            hits = _transcribe_onsets(drum_stem, config)
+    elif config.backend == "onset":
+        hits = _transcribe_onsets(drum_stem, config)
+    else:
+        raise ValueError(f"Unknown drum transcription backend: {config.backend!r}")
+
+    if config.boost_double_kick:
+        from .kick import boost_double_kick
+
+        hits = boost_double_kick(hits, drum_stem, velocity=config.default_velocity)
+    return hits
 
 
 # --- ADTOF ---------------------------------------------------------------------------
