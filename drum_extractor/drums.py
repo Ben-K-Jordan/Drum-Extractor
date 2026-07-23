@@ -169,8 +169,11 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
     # not merely because it clears the corpus median (which ~half of onsets do
     # by definition, fabricating phantom kicks/snares on cymbal-only material).
     # Fractions are relative to each onset's own total, so an absent instrument
-    # contributes negligible share and does not fire.
-    KICK_SHARE, SNARE_SHARE, HIHAT_SHARE = 0.35, 0.35, 0.30
+    # contributes negligible share and does not fire. Thresholds are config
+    # fields, grid-searched against the ground-truth groove bank.
+    KICK_SHARE = config.onset_kick_share
+    SNARE_SHARE = config.onset_snare_share
+    HIHAT_SHARE = config.onset_hihat_share
     for t in onset_times:
         frame = librosa.time_to_frames(t, sr=sr, hop_length=512)
         frame = int(min(max(frame, 0), stft.shape[1] - 1))

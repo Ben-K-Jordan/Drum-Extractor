@@ -84,6 +84,24 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(tb)
     tb.add_argument("--crepe", action="store_true", help="Octave-correct with torchcrepe")
 
+    # bank-build / bank-eval — ground-truth accuracy bank
+    bb = sub.add_parser("bank-build", help="Build the ground-truth groove bank (synthesized audio + known hits)")
+    _add_common(bb)
+    bb.add_argument("--presets", default=None, help="Comma-separated preset names (default: all)")
+    bb.add_argument("--bars", type=int, default=4)
+    bb.add_argument("--jitter-ms", type=float, default=0.0, help="Humanize onset timing (std dev, ms)")
+    bb.add_argument("--vel-jitter", type=int, default=0, help="Humanize velocities (+/- range)")
+    bb.add_argument("--noise-snr-db", type=float, default=None, help="Mix in noise at this SNR (simulates bleed)")
+    bb.add_argument("--seed", type=int, default=0)
+    bb.add_argument("--notation", action="store_true", help="Also write reference.musicxml per item")
+
+    be = sub.add_parser("bank-eval", help="Transcribe the bank and score accuracy vs ground truth")
+    be.add_argument("bank_dir", help="Directory written by bank-build")
+    _add_common(be)
+    be.add_argument("--backend", default="onset", choices=["adtof", "onset"], help="Drum backend to evaluate")
+    be.add_argument("--boost-double-kick", action="store_true", help="Evaluate with the kick booster enabled")
+    be.add_argument("--tolerance-ms", type=float, default=50.0, help="Onset match window (default 50ms)")
+
     # notate — Stage 4
     nt = sub.add_parser("notate", help="Stage 4: transcription.json or drum MIDI -> sheet music")
     nt.add_argument("source", help="transcription.json or a drum .mid file")
@@ -165,6 +183,43 @@ def _cmd_transcribe_bass(args) -> int:
     return 0
 
 
+def _cmd_bank_build(args) -> int:
+    from .bank import build_bank
+
+    presets = [p.strip() for p in args.presets.split(",")] if args.presets else None
+    items = build_bank(
+        args.output if args.output != "output" else "bank",
+        presets=presets,
+        bars=args.bars,
+        jitter_ms=args.jitter_ms,
+        vel_jitter=args.vel_jitter,
+        noise_snr_db=args.noise_snr_db,
+        seed=args.seed,
+        write_notation=args.notation,
+    )
+    for item in items:
+        print(f"{item.name:<20} {item.bpm:>6.0f} BPM  {item.n_hits:>4} hits  {item.path}")
+    return 0
+
+
+def _cmd_bank_eval(args) -> int:
+    import json as _json
+
+    from .bank import evaluate_bank, format_report
+    from .config import DrumTranscriptionConfig
+
+    report = evaluate_bank(
+        args.bank_dir,
+        DrumTranscriptionConfig(backend=args.backend, boost_double_kick=args.boost_double_kick),
+        tolerance=args.tolerance_ms / 1000.0,
+    )
+    print(format_report(report))
+    out = Path(args.bank_dir) / "report.json"
+    out.write_text(_json.dumps(report, indent=2))
+    print(f"\nreport -> {out}")
+    return 0
+
+
 def _cmd_notate(args) -> int:
     from .events import Transcription
     from .midi_io import read_drum_hits, read_drum_tempo
@@ -193,6 +248,8 @@ _COMMANDS = {
     "separate": _cmd_separate,
     "transcribe-drums": _cmd_transcribe_drums,
     "transcribe-bass": _cmd_transcribe_bass,
+    "bank-build": _cmd_bank_build,
+    "bank-eval": _cmd_bank_eval,
     "notate": _cmd_notate,
 }
 

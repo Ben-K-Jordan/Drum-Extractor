@@ -48,6 +48,14 @@ class DrumTranscriptionConfig:
     # and ``{output}`` are substituted at call time.
     adtof_command: tuple[str, ...] = ("adtof", "--audio", "{input}", "--out", "{output}")
     default_velocity: int = 96
+    # Onset-fallback band-share thresholds: a band fires when it holds at least
+    # this fraction of the onset's total energy. Defaults were grid-searched
+    # against the ground-truth groove bank (`drum-extractor bank-eval`) — the
+    # low band is physically narrow (<150 Hz) so even a strong kick holds a
+    # small share, hence the much lower kick threshold.
+    onset_kick_share: float = 0.02
+    onset_snare_share: float = 0.10
+    onset_hihat_share: float = 0.70
     # Phase 4: recover fast double-bass the full-kit model merges, via a
     # low-pass kick-band onset detector. Targets metal's biggest weak spot.
     boost_double_kick: bool = False

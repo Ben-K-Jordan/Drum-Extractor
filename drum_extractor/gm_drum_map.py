@@ -123,6 +123,16 @@ PLACEMENT: dict[str, Placement] = {
     SPLASH:       Placement("B", 5, "x",        "up",   1),
 }
 
+# Scoring families: ADT models (and honest evaluation) work at the 5-class
+# level, so accuracy metrics group canonical instruments into these families.
+FAMILY: dict[str, str] = {
+    KICK: "kick",
+    SNARE: "snare", SIDE_STICK: "snare",
+    HIHAT_CLOSED: "hihat", HIHAT_OPEN: "hihat", HIHAT_PEDAL: "hihat",
+    TOM_HIGH: "toms", TOM_MID: "toms", TOM_LOW: "toms",
+    CRASH: "cymbals", RIDE: "cymbals", RIDE_BELL: "cymbals", CHINA: "cymbals", SPLASH: "cymbals",
+}
+
 # Human-readable labels, handy for text output / debugging.
 DISPLAY_NAMES: dict[str, str] = {
     KICK: "Kick", SNARE: "Snare", SIDE_STICK: "Side stick",

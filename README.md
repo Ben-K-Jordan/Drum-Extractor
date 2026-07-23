@@ -249,6 +249,41 @@ comparison also caught real issues, now fixed:
 - Plus basic-pitch note-length/threshold knobs exposed, `[all]` recomposed so it
   can't drift, and an installable `[adtof]` extra.
 
+### Measured accuracy: the ground-truth groove bank
+
+The repo ships a **ground-truth accuracy bank**: programmatically generated
+grooves (rock, d-beat, 200 BPM double-kick, 220 BPM blast, gallops, fills,
+ghost notes) rendered to audio by our own synthesizer, so the true hits are
+known exactly and any transcriber can be scored with real F-measures:
+
+```bash
+drum-extractor bank-build -o bank --jitter-ms 5 --vel-jitter 8   # build it
+drum-extractor bank-eval bank --backend onset                    # score a backend
+```
+
+Why a bank instead of training data: training-scale corpora already exist
+(ADTOF ~359h, E-GMD 444h) — personal-scale data is worth far more as a
+*benchmark* (measure → tune → regression-test accuracy). Every item is also an
+(audio, ground-truth MIDI) pair, i.e. fine-tuning-ready if we ever train.
+
+It paid off immediately — F-scores of the librosa **onset fallback** (±50 ms):
+
+| | cymbals | hihat | kick | snare | toms | overall |
+|---|---|---|---|---|---|---|
+| intuition-set thresholds | 0.00 | 0.82 | 0.12 | 0.00 | 0.00 | **0.46** |
+| bank-tuned thresholds | 0.00 | 0.83 | 0.62 | 0.75 | 0.00 | **0.71** |
+
+(The snare threshold was flat-out wrong before — the bank exposed it in one
+run, and a grid search over the bank picked the shipped defaults.) It also
+validated the double-kick booster with numbers: on 200 BPM sixteenth
+double-kick, kick recall goes **0.30 → 1.00** with `--boost-double-kick` — but
+aggregate F *drops* on other material, so enable it for double-kick songs
+specifically, not globally.
+
+Cymbal/tom identity remains the fallback's blind spot (F=0.00) — consistent
+with the research: that's what ADTOF is for. Run `bank-eval --backend adtof`
+on your machine once ADTOF is installed to see its scores on the same bank.
+
 ### Known rough edges / good first customizations
 - **Kit mapping** — edit `PLACEMENT` / `CANONICAL_TO_GM` in `drum_extractor/gm_drum_map.py` to match your kit or notation preferences.
 - **ADTOF command** — defaults to ADTOF-pytorch's `adtof --audio {input} --out {output}` (writes MIDI); output is detected by content, so MIDI or `time\tpitch` text both work. Override `DrumTranscriptionConfig.adtof_command` for a different install (e.g. `omnizart drum transcribe`).
