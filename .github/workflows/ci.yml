@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push supersedes an in-flight run — don't stack hour-long docker
+# builds behind each other.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     name: Test suite
@@ -53,6 +59,7 @@ jobs:
     needs: [tests, accuracy]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 45  # a healthy slim build takes minutes; fail loud, not for 6h
     permissions:
       contents: read
       packages: write
