@@ -34,9 +34,12 @@ class DrumTranscriptionConfig:
     """Stage 2a — drum audio -> drum hits."""
 
     backend: str = "adtof"  # "adtof" | "onset" (librosa fallback) | "none"
-    # Override the exact ADTOF command if your install exposes a different entry
-    # point. ``{input}`` and ``{output}`` are substituted at call time.
-    adtof_command: tuple[str, ...] = ("python", "-m", "adtof", "{input}", "{output}")
+    # Command to invoke ADTOF. Default targets ADTOF-pytorch, whose `adtof`
+    # console script takes `--audio`/`--out` and writes MIDI. There is NO
+    # `python -m adtof`. Override for a different install (e.g. omnizart:
+    # ("omnizart","drum","transcribe","{input}","-o","{output}")). ``{input}``
+    # and ``{output}`` are substituted at call time.
+    adtof_command: tuple[str, ...] = ("adtof", "--audio", "{input}", "--out", "{output}")
     default_velocity: int = 96
     # Phase 4: recover fast double-bass the full-kit model merges, via a
     # low-pass kick-band onset detector. Targets metal's biggest weak spot.
@@ -50,6 +53,11 @@ class BassTranscriptionConfig:
     backend: str = "basic_pitch"  # "basic_pitch" | "none"
     min_frequency: float = 32.7  # C1; standard 4-string low E is 41 Hz
     max_frequency: float = 400.0
+    # basic-pitch note-gating knobs. Its 127.7 ms default drops fast 16ths/ghost
+    # notes; lower it for busy metal bass. Thresholds default to basic-pitch's.
+    minimum_note_length_ms: float = 90.0
+    onset_threshold: float = 0.5
+    frame_threshold: float = 0.3
     refine_with_crepe: bool = False  # octave-correct with torchcrepe (needs the extra)
     # Standard 4-string bass tuning (E1 A1 D2 G2) as MIDI note numbers, low->high.
     tuning: tuple[int, ...] = (28, 33, 38, 43)

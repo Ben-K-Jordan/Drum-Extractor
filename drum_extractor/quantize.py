@@ -64,7 +64,13 @@ def _detect_madmom(audio_path: Path, config: QuantizeConfig) -> tuple[float | No
         raise MissingDependencyError("Beat tracking", "madmom", extra="quantize") from exc
 
     act = RNNDownBeatProcessor()(str(audio_path))
-    proc = DBNDownBeatTrackingProcessor(beats_per_bar=[config.beats_per_bar], fps=100)
+    dbn_kwargs = {"beats_per_bar": [config.beats_per_bar], "fps": 100}
+    if config.fixed_tempo:
+        # Constrain tracking to a tight window around the known tempo instead of
+        # only relabeling the reported value afterwards.
+        dbn_kwargs["min_bpm"] = config.fixed_tempo * 0.97
+        dbn_kwargs["max_bpm"] = config.fixed_tempo * 1.03
+    proc = DBNDownBeatTrackingProcessor(**dbn_kwargs)
     result = proc(act)  # rows of [time, beat_number]
     beats = [float(t) for t, _ in result]
     downbeats = [float(t) for t, b in result if int(b) == 1]
@@ -82,7 +88,11 @@ def _detect_librosa(audio_path: Path, config: QuantizeConfig) -> tuple[float | N
         raise MissingDependencyError("Beat tracking", "librosa", extra="drums") from exc
 
     y, sr = librosa.load(str(audio_path), sr=44100, mono=True)
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units="frames")
+    bt_kwargs = {"y": y, "sr": sr, "units": "frames"}
+    if config.fixed_tempo:
+        # bpm= fixes the tempo used for the beat-tracking DP (not just a prior).
+        bt_kwargs["bpm"] = float(config.fixed_tempo)
+    tempo, beat_frames = librosa.beat.beat_track(**bt_kwargs)
     beats = [float(t) for t in librosa.frames_to_time(beat_frames, sr=sr)]
     # librosa >=0.10 returns tempo as a NumPy array; extract a scalar safely.
     tempo_arr = np.atleast_1d(tempo)

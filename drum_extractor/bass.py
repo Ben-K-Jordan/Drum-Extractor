@@ -40,6 +40,9 @@ def transcribe_bass(bass_stem: str | Path, config: BassTranscriptionConfig | Non
         model_or_model_path=ICASSP_2022_MODEL_PATH,
         minimum_frequency=config.min_frequency,
         maximum_frequency=config.max_frequency,
+        minimum_note_length=config.minimum_note_length_ms,
+        onset_threshold=config.onset_threshold,
+        frame_threshold=config.frame_threshold,
     )
 
     notes: list[BassNote] = []
@@ -79,14 +82,22 @@ def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote], min_frequ
     y, sr = librosa.load(str(bass_stem), sr=16000, mono=True)
     audio = torch.tensor(y)[None]
     hop = 160  # 10 ms at 16 kHz
-    f0 = torchcrepe.predict(audio, sr, hop_length=hop, fmin=fmin, fmax=500, model="full", batch_size=512, device="cpu")
-    f0 = f0[0].cpu().numpy()
+    pitch, periodicity = torchcrepe.predict(
+        audio, sr, hop_length=hop, fmin=fmin, fmax=500, model="full",
+        batch_size=512, device="cpu", return_periodicity=True,
+    )
+    # predict() emits a pitch for EVERY frame (incl. silence/decay/unvoiced), so
+    # a raw median is polluted. Threshold on smoothed periodicity — torchcrepe's
+    # documented recipe — so only confidently-voiced frames feed the median.
+    periodicity = torchcrepe.filter.median(periodicity, 3)
+    pitch = torchcrepe.threshold.At(0.21)(pitch, periodicity)
+    f0 = pitch[0].cpu().numpy()
     times = np.arange(len(f0)) * hop / sr
 
     def crepe_pitch(start: float, end: float) -> float | None:
         mask = (times >= start) & (times < end)
         seg = f0[mask]
-        seg = seg[seg > 0]
+        seg = seg[np.isfinite(seg) & (seg > 0)]  # drop unvoiced (NaN) frames
         if seg.size == 0:
             return None
         return float(librosa.hz_to_midi(np.median(seg)))

@@ -60,28 +60,54 @@ def _transcribe_adtof(drum_stem: Path, config: DrumTranscriptionConfig) -> list[
     ``config.adtof_command``. We accept either a MIDI or a text/CSV onset file as
     the output artifact and normalise the class labels to canonical names.
     """
-    out_path = drum_stem.with_suffix(".adtof.txt")
+    out_path = drum_stem.with_suffix(".adtof.mid")
     cmd = [part.format(input=str(drum_stem), output=str(out_path)) for part in config.adtof_command]
     log.info("Running ADTOF: %s", " ".join(cmd))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError as exc:
         raise ExternalToolError(
-            "ADTOF is not installed or not on PATH. Install with: pip install "
-            '"drum-extractor[drums]"  (see README for the pip install adtof notes).'
+            "ADTOF was not found on PATH. Note there is no `pip install adtof` that provides a CLI: "
+            "install ADTOF-pytorch (which provides the `adtof` command) with "
+            "`pip install \"drum-extractor[adtof]\"`, or point DrumTranscriptionConfig.adtof_command at "
+            "your own install / use the librosa 'onset' backend. See the README."
         ) from exc
     if proc.returncode != 0:
         raise ExternalToolError(f"ADTOF exited {proc.returncode}: {proc.stderr.strip()[:500]}")
 
-    # ADTOF may write the requested text file or a sibling MIDI; handle both.
-    if out_path.exists():
-        return _parse_onset_text(out_path, config.default_velocity)
-    midi_candidate = drum_stem.with_suffix(".mid")
-    if midi_candidate.exists():
-        from .midi_io import read_drum_hits
+    return _read_adtof_output(out_path, drum_stem, config.default_velocity)
 
-        return read_drum_hits(midi_candidate, config.default_velocity)
-    raise ExternalToolError("ADTOF ran but produced no recognizable output file.")
+
+def _read_adtof_output(out_path: Path, drum_stem: Path, velocity: int) -> list[DrumHit]:
+    """Read whatever ADTOF wrote, detecting MIDI vs text by content.
+
+    ADTOF variants differ: ADTOF-pytorch writes MIDI (bytes are MIDI regardless
+    of the output filename), while the original writes a ``time\\tpitch`` text
+    file — sometimes into a folder named by track title rather than the exact
+    path we asked for. So we search the requested path plus sibling ``.mid``/
+    ``.txt`` files and dispatch by the file's actual content, not its extension.
+    """
+    from .midi_io import read_drum_hits
+
+    candidates = [out_path]
+    candidates += sorted(out_path.parent.glob(f"{drum_stem.stem}*.mid"))
+    candidates += sorted(out_path.parent.glob(f"{drum_stem.stem}*.txt"))
+    seen = set()
+    for p in candidates:
+        rp = p.resolve()
+        if rp in seen or not p.exists() or p.stat().st_size == 0:
+            continue
+        seen.add(rp)
+        if p.read_bytes()[:4] == b"MThd":  # standard MIDI header
+            hits = read_drum_hits(p, velocity)
+        else:
+            try:
+                hits = _parse_onset_text(p, velocity)
+            except (UnicodeDecodeError, ValueError):
+                continue
+        if hits:
+            return hits
+    raise ExternalToolError("ADTOF ran but produced no recognizable output (.mid or time/pitch .txt).")
 
 
 def _parse_onset_text(path: Path, velocity: int) -> list[DrumHit]:

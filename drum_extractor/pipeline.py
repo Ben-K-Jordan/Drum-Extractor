@@ -130,6 +130,7 @@ def _try(result: PipelineResult, label: str, fn) -> None:
     except Exception as exc:  # keep the pipeline's graceful-degradation contract
         msg = f"{label}: unexpected {type(exc).__name__}: {exc}"
         log.warning(msg)
+        log.debug("%s failed", label, exc_info=True)  # full traceback under -v
         result.warnings.append(msg)
 
 

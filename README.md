@@ -73,7 +73,7 @@ Three tools install separately because they're heavier or app-based:
 
 | Tool | Why separate | Install |
 |------|--------------|---------|
-| **ADTOF** (best drum transcriber) | own heavy deps | `pip install adtof` (see notes below) |
+| **ADTOF** (best drum transcriber) | no PyPI CLI package | `pip install -e ".[adtof]"` — installs ADTOF-pytorch (the `adtof` command) from git. There is **no** `pip install adtof`. |
 | **madmom** (beat tracking) | can be tricky to build; auto-falls back to librosa | `pip install ".[quantize]"` |
 | **MuseScore 4** (PDF rendering) | desktop app, not a pip package | install from [musescore.org](https://musescore.org), ensure `mscore`/`musescore4` is on PATH |
 
@@ -219,9 +219,32 @@ tests. The most important:
 - Plus non-120-BPM last-bar mislabeling, non-quarter-meter placement, tempo-less
   `.mid` notation, IR-persistence ordering, and several robustness/UX fixes.
 
+### Benchmarked against the upstream projects
+
+A 6-way comparison read the real source of the projects we build on (Demucs,
+UVR, python-audio-separator, ADTOF / ADTOF-pytorch, basic-pitch, torchcrepe,
+music21, madmom, note-seq) and diffed it against ours. Most of our API usage
+came back **textbook-correct** (Demucs `Separator`, basic-pitch `predict`,
+music21 percussion staff, madmom DBN, two-voice hands/feet split). The
+comparison also caught real issues, now fixed:
+
+- **ADTOF never ran (critical):** our default command (`python -m adtof …`)
+  matches no real ADTOF install, so the flagship backend silently fell back to
+  the onset detector. Now targets ADTOF-pytorch's real `adtof` CLI, with output
+  detected by content (MIDI or text).
+- **Ensemble cancelled transients:** it averaged two separators' drum stems with
+  no time alignment (they emit the same hit a few samples apart). Now
+  cross-correlation-aligned before averaging, like UVR.
+- **`fixed_tempo` was cosmetic:** it relabeled the reported tempo but never
+  constrained tracking. Now fed into madmom (`min_bpm/max_bpm`) and librosa (`bpm=`).
+- **CREPE median over garbage frames:** the octave-refinement median included
+  unvoiced/decay frames. Now periodicity-thresholded (torchcrepe's recipe).
+- Plus basic-pitch note-length/threshold knobs exposed, `[all]` recomposed so it
+  can't drift, and an installable `[adtof]` extra.
+
 ### Known rough edges / good first customizations
 - **Kit mapping** — edit `PLACEMENT` / `CANONICAL_TO_GM` in `drum_extractor/gm_drum_map.py` to match your kit or notation preferences.
-- **ADTOF command** — the exact CLI varies by install; override `DrumTranscriptionConfig.adtof_command` if needed (`{input}`/`{output}` are substituted).
+- **ADTOF command** — defaults to ADTOF-pytorch's `adtof --audio {input} --out {output}` (writes MIDI); output is detected by content, so MIDI or `time\tpitch` text both work. Override `DrumTranscriptionConfig.adtof_command` for a different install (e.g. `omnizart drum transcribe`).
 - **Voice numbering** — music21 exports voices as 0/1; MuseScore maps them fine, but you can post-process the MusicXML if you need strict 1/2.
 - **Grid choice** — `--grid` dominates readability (16 for rock, 32 for double-kick); tune per song.
 

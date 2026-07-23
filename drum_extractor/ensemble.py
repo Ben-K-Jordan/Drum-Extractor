@@ -22,11 +22,29 @@ from .logging_utils import get_logger
 log = get_logger(__name__)
 
 
-def average_stems(paths: list[str | Path], out_path: str | Path) -> Path:
-    """Average several mono/stereo stem files into one, aligned to the shortest.
+def _best_lag(a, b, max_lag: int):
+    """Integer-sample lag that best aligns mono signal ``b`` to ``a`` (|lag|<=max_lag)."""
+    import numpy as np  # type: ignore
+    from scipy.signal import correlate  # type: ignore
 
-    Files are matched on channel count (mono is broadcast); the result is
-    peak-normalised. Used to blend two separators' drum stems.
+    n = min(len(a), len(b))
+    a = a[:n] - a[:n].mean()
+    b = b[:n] - b[:n].mean()
+    if not np.any(a) or not np.any(b):
+        return 0
+    corr = correlate(a, b, mode="full", method="fft")
+    center = n - 1
+    lo, hi = max(0, center - max_lag), min(len(corr), center + max_lag + 1)
+    return int((np.arange(lo, hi) - center)[np.argmax(corr[lo:hi])])
+
+
+def average_stems(paths: list[str | Path], out_path: str | Path, align: bool = True) -> Path:
+    """Blend several stem files into one by time-aligned averaging.
+
+    Different separators emit the same transient a few samples apart, so we
+    cross-correlate each stem against the first and shift it into phase before
+    averaging — otherwise the kick/snare attacks comb-filter and cancel (the
+    opposite of the intended bleed reduction). Result is peak-normalised.
     """
     try:
         import numpy as np  # type: ignore
@@ -48,9 +66,19 @@ def average_stems(paths: list[str | Path], out_path: str | Path) -> Path:
 
     min_len = min(a.shape[0] for a in arrays)
     max_ch = max(a.shape[1] for a in arrays)
+    arrays = [a[:min_len] for a in arrays]
+
+    if align and len(arrays) > 1:
+        ref = arrays[0].mean(axis=1)
+        max_lag = int(0.05 * sr)  # expect only a few-ms offset; cap at 50 ms
+        for i in range(1, len(arrays)):
+            lag = _best_lag(ref, arrays[i].mean(axis=1), max_lag)
+            if lag:
+                arrays[i] = np.roll(arrays[i], lag, axis=0)
+                log.info("Aligned stem %d by %+d samples (%.1f ms)", i, lag, 1000.0 * lag / sr)
+
     acc = np.zeros((min_len, max_ch), dtype=np.float64)
     for a in arrays:
-        a = a[:min_len]
         if a.shape[1] == 1 and max_ch > 1:
             a = np.repeat(a, max_ch, axis=1)
         acc[:, : a.shape[1]] += a
