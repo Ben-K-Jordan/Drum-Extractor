@@ -18,16 +18,23 @@ Everything runs **locally** — your audio never leaves your machine.
   state of the art — on dense, distorted mixes included.
 - **Mixer-board web UI**: a fader per stem with mute/solo, so you can drum
   along with the band minus the drummer, or isolate the kit to learn it.
-- **Practice tools**: slow playback to 50% *with pitch preserved*, and an
-  A–B loop for drilling one riff or fill.
+- **Practice tools**: slow playback to 50% *with pitch preserved*, an A–B loop
+  for drilling one riff or fill, and a **hit-marker strip** showing every
+  detected drum hit on the timeline (click to jump).
 - **Drum sheet music**: transcribes the drum stem to MIDI and engraves it —
-  shown inline on the mixer page, downloadable as PDF/MusicXML/MIDI.
+  shown inline on the mixer page **with the current measure highlighted as the
+  song plays**, downloadable as PDF/MusicXML/MIDI. Dynamics survive: ghost
+  notes engrave parenthesized, accents get accent marks.
 - **Bass tabs**: note transcription plus a playable ASCII tab (chord-aware —
   double-stops land on separate strings).
 - **Guitar tabs (optional)**: tick "also transcribe guitar" and the 6-stem
   model adds Guitar & Keys channels plus a separate chord-aware guitar tab.
   Honest caveat: clean/lead guitar transcribes usefully; high-gain rhythm
   guitar is the hardest signal there is — treat those tabs as a first sketch.
+- **Guitar Pro export**: bass and guitar tabs also save as `.gp5` (opens in
+  Guitar Pro, TuxGuitar, MuseScore — with playback).
+- **A real library**: processed songs survive server restarts and are listed
+  on the drop page; separation shows live percent progress while you wait.
 - **Download your mix**: the stem levels you set render straight to a WAV in
   the browser.
 

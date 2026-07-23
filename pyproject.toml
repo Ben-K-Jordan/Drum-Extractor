@@ -55,6 +55,10 @@ notation = ["music21>=9.1.0"]
 # aids need no extra install (they use scipy/librosa/soundfile from above).
 ensemble = ["audio-separator>=0.17"]
 
+# Guitar Pro (.gp5) export of the bass/guitar tabs — opens in Guitar Pro,
+# TuxGuitar, and MuseScore with playback.
+gp = ["PyGuitarPro>=0.9"]
+
 # Local web UI: drop page -> stem mixer -> downloads (`drum-extractor web`).
 # verovio engraves the drum sheet to SVG for the inline preview on the mixer
 # page (no MuseScore needed); the UI degrades gracefully without it.
@@ -72,7 +76,7 @@ adtof = ["adtof @ git+https://github.com/xavriley/ADTOF-pytorch"]
 #   users, and quantization falls back to librosa automatically anyway.
 # - adtof: installed from git, not PyPI.
 # Opt into either with its own extra once the base install works.
-all = ["drum-extractor[separation,drums,bass,bass-crepe,notation,ensemble,web]"]
+all = ["drum-extractor[separation,drums,bass,bass-crepe,notation,ensemble,web,gp]"]
 
 dev = ["pytest>=7.0"]
 

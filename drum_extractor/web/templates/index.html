@@ -22,6 +22,11 @@
   #status.error { color:#ff7b6b; }
   .opt { display:flex; gap:.5rem; align-items:center; color:#aeb6c4; font-size:.9rem; }
   .opt input { accent-color:#e05545; width:1.05rem; height:1.05rem; }
+  .library { width:min(560px,90vw); }
+  .library h2 { font-size:.85rem; letter-spacing:.1em; color:#5c6474; text-transform:uppercase; margin-bottom:.5rem; }
+  .library a { display:block; color:#aeb6c4; text-decoration:none; padding:.45rem .7rem; border:1px solid #2c313c;
+               border-radius:7px; margin-bottom:.4rem; background:#1b1f27; }
+  .library a:hover { border-color:#e05545; color:#e6e9ef; }
   .hint { color:#5c6474; font-size:.85rem; max-width:560px; text-align:center; }
 </style>
 </head>
@@ -41,6 +46,13 @@
   <div id="status"></div>
   <p class="hint">Separation runs locally (Demucs). A full song takes roughly its own
      length on CPU, much less with a GPU — you'll land on the mixer as soon as the stems are ready.</p>
+
+  {% if recent %}
+  <div class="library">
+    <h2>Recent songs</h2>
+    {% for r in recent %}<a href="{{ r.mixer }}">{{ r.title }}</a>{% endfor %}
+  </div>
+  {% endif %}
 
 <script>
 const drop = document.getElementById('drop');

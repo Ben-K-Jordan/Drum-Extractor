@@ -62,6 +62,7 @@ class Job:
     state: str = "queued"  # queued | <stage name> | done | error
     error: str | None = None
     result: PipelineResult | None = None
+    timing: dict | None = None  # tempo / downbeats / drum hits for the mixer overlays
     created: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
@@ -77,18 +78,101 @@ class Job:
                 downloads["midi"] = {"url": f"/download/{self.id}/midi", "label": "Drum MIDI"}
             if self.result.bass_tab:
                 downloads["tab"] = {"url": f"/download/{self.id}/tab", "label": "Bass tab"}
+            if self.result.bass_gp:
+                downloads["gpb"] = {"url": f"/download/{self.id}/gpb", "label": "Bass tab (.gp5)"}
             if self.result.guitar_tab:
                 downloads["gtab"] = {"url": f"/download/{self.id}/gtab", "label": "Guitar tab"}
+            if self.result.guitar_gp:
+                downloads["gpg"] = {"url": f"/download/{self.id}/gpg", "label": "Guitar tab (.gp5)"}
             if self.result.guitar_midi:
                 downloads["gmidi"] = {"url": f"/download/{self.id}/gmidi", "label": "Guitar MIDI"}
             d["downloads"] = downloads
             d["warnings"] = self.result.warnings
+            if self.timing:
+                d["timing"] = self.timing
             # Inline sheet preview: SVG via verovio when available, else the PDF.
             if self.result.musicxml and _verovio_available():
                 d["sheet_view"] = {"kind": "svg", "url": f"/sheet/{self.id}.svg"}
             elif self.result.pdf:
                 d["sheet_view"] = {"kind": "pdf", "url": f"/sheet/{self.id}.pdf"}
         return d
+
+
+_ARTIFACT_FIELDS = (
+    "musicxml", "pdf", "drum_midi", "bass_midi", "bass_tab",
+    "guitar_midi", "guitar_tab", "bass_gp", "guitar_gp",
+)
+
+
+def _timing_from(result: PipelineResult) -> dict | None:
+    """Extract what the mixer overlays need: tempo, downbeats, hit markers."""
+    from ..gm_drum_map import FAMILY
+
+    t = result.transcription
+    if not (t.tempo or t.downbeats or t.drum_hits):
+        return None
+    return {
+        "tempo": t.tempo,
+        "downbeats": [round(x, 4) for x in t.downbeats[:4000]],
+        "drum_hits": [[round(h.time, 3), FAMILY.get(h.instrument, "other")] for h in t.drum_hits[:8000]],
+    }
+
+
+def _persist_job(job: Job, job_dir: Path) -> None:
+    """Write a manifest so processed songs survive a server restart."""
+    import json
+
+    r = job.result
+    if r is None:
+        return
+    manifest = {
+        "id": job.id,
+        "title": job.title,
+        "created": job.created,
+        "stems": {k: str(v) for k, v in r.stems.available().items()},
+        "artifacts": {f: str(getattr(r, f)) for f in _ARTIFACT_FIELDS if getattr(r, f)},
+        "warnings": r.warnings,
+        "timing": job.timing,
+    }
+    try:
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "job.json").write_text(json.dumps(manifest, indent=2))
+    except OSError as exc:
+        log.warning("Could not persist job manifest (%s) — the mixer won't survive a restart.", exc)
+
+
+def _restore_jobs(store: "JobStore", output_dir: Path) -> int:
+    """Rebuild done jobs from manifests written by earlier runs."""
+    import json
+
+    jobs_root = output_dir / "jobs"
+    if not jobs_root.is_dir():
+        return 0
+    restored = 0
+    for manifest_path in sorted(jobs_root.glob("*/job.json")):
+        try:
+            m = json.loads(manifest_path.read_text())
+            result = PipelineResult()
+            for name, p in m.get("stems", {}).items():
+                if Path(p).exists() and hasattr(result.stems, name):
+                    setattr(result.stems, name, Path(p))
+            for f, p in m.get("artifacts", {}).items():
+                if f in _ARTIFACT_FIELDS and Path(p).exists():
+                    setattr(result, f, Path(p))
+            result.warnings = list(m.get("warnings", []))
+            if not result.stems.available():
+                continue  # stems were deleted; nothing to mix
+            job = Job(
+                id=str(m["id"]), title=str(m.get("title", "song")), state="done",
+                result=result, timing=m.get("timing"), created=float(m.get("created", 0)),
+            )
+            store.put(job)
+            restored += 1
+        except Exception as exc:  # one bad manifest must not break startup
+            log.warning("Skipping unreadable job manifest %s (%s)", manifest_path, exc)
+    if restored:
+        log.info("Restored %d processed song(s) from previous runs", restored)
+    return restored
 
 
 # verovio's toolkit only finds its font resources when CONSTRUCTED on the main
@@ -142,9 +226,18 @@ class JobStore:
             self._jobs[job.id] = job
         return job
 
+    def put(self, job: Job) -> None:
+        with self._lock:
+            self._jobs[job.id] = job
+
     def get(self, job_id: str) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def recent_done(self, limit: int = 12) -> list[Job]:
+        with self._lock:
+            done = [j for j in self._jobs.values() if j.state == "done"]
+        return sorted(done, key=lambda j: j.created, reverse=True)[:limit]
 
 
 def _run_job(job: Job, audio_path: Path, config: PipelineConfig) -> None:
@@ -158,7 +251,9 @@ def _run_job(job: Job, audio_path: Path, config: PipelineConfig) -> None:
             job.state = "error"
             job.error = "Separation produced no stems — see the server log."
         else:
+            job.timing = _timing_from(result)
             job.state = "done"
+            _persist_job(job, Path(config.output_dir))
     except Exception as exc:  # surfaced via /job/<id>, not a crashed thread
         log.exception("Job %s failed", job.id)
         job.state = "error"
@@ -184,10 +279,15 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
     app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # accept long WAV recordings
     store = JobStore()
     app.extensions["drum_extractor_jobs"] = store  # handy for tests
+    _restore_jobs(store, output_dir)  # processed songs survive restarts
 
     @app.get("/")
     def index():
-        return render_template("index.html", formats=", ".join(sorted(ALLOWED_EXTENSIONS)))
+        recent = [
+            {"title": j.title, "mixer": f"/mixer/{j.id}"}
+            for j in store.recent_done()
+        ]
+        return render_template("index.html", formats=", ".join(sorted(ALLOWED_EXTENSIONS)), recent=recent)
 
     @app.post("/upload")
     def upload():
@@ -270,6 +370,8 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
             "tab": r.bass_tab,
             "gtab": r.guitar_tab,
             "gmidi": r.guitar_midi,
+            "gpb": r.bass_gp,
+            "gpg": r.guitar_gp,
         }.get(kind)
         if path is None or not Path(path).exists():
             abort(404)

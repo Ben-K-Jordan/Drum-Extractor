@@ -164,7 +164,6 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
     high = freqs >= 5000
 
     hits: list[DrumHit] = []
-    vel = config.default_velocity
     # Dominance-based classification: the strongest band ALWAYS fires (every
     # onset gets exactly one primary instrument), and a non-dominant band fires
     # only if its energy share clears its own (deliberately high) secondary
@@ -179,6 +178,11 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
         "mid": config.onset_snare_share,
         "high": config.onset_hihat_share,
     }
+
+    # First pass: measure every onset, so velocities can be scaled against the
+    # track's own loud hits (p95). Ghost notes and accents matter for learning
+    # a groove, so a fixed velocity would throw away half the information.
+    measured = []
     for t in onset_times:
         frame = librosa.time_to_frames(t, sr=sr, hop_length=512)
         frame = int(min(max(frame, 0), stft.shape[1] - 1))
@@ -186,14 +190,24 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
         e_low = float(window[low].sum())
         e_mid = float(window[mid].sum())
         e_high = float(window[high].sum())
-        total = e_low + e_mid + e_high + 1e-12
-        shares = {"low": e_low / total, "mid": e_mid / total, "high": e_high / total}
+        total = e_low + e_mid + e_high
+        shares = {"low": e_low / (total + 1e-12), "mid": e_mid / (total + 1e-12), "high": e_high / (total + 1e-12)}
+        measured.append((float(t), shares, total))
 
+    ref = float(np.percentile([m[2] for m in measured], 95)) if measured else 1.0
+    ref = ref or 1.0
+
+    def velocity_of(total: float) -> int:
+        # sqrt compresses the range: ghosts stay quiet but visible, accents cap.
+        return int(min(127, max(20, round(25 + 95 * (total / ref) ** 0.5))))
+
+    for t, shares, total in measured:
+        vel = velocity_of(total)
         dominant = max(shares, key=shares.get)  # type: ignore[arg-type]
-        hits.append(DrumHit(time=float(t), instrument=band_instr[dominant], velocity=vel))
+        hits.append(DrumHit(time=t, instrument=band_instr[dominant], velocity=vel))
         for band, share in shares.items():
             if band != dominant and share >= secondary[band]:
-                hits.append(DrumHit(time=float(t), instrument=band_instr[band], velocity=vel))
+                hits.append(DrumHit(time=t, instrument=band_instr[band], velocity=vel))
 
     hits.sort(key=lambda h: h.time)
     log.info("Onset fallback: %d onsets -> %d hits", len(onset_times), len(hits))

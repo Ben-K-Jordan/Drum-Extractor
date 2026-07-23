@@ -21,6 +21,8 @@
   @keyframes spin { to { transform:rotate(360deg); } }
   #stage { color:#8b93a3; }
   #procerror { color:#ff7b6b; max-width:520px; text-align:center; white-space:pre-wrap; }
+  #pbarwrap { width:min(420px,80vw); height:8px; background:#2c313c; border-radius:5px; overflow:hidden; display:none; }
+  #pbar { height:100%; width:0%; background:#e05545; transition:width .6s; }
 
   /* console */
   #console { display:none; flex-direction:column; gap:1.2rem; width:min(860px,95vw); }
@@ -45,7 +47,9 @@
                       width:44px; height:38px; border-radius:7px; cursor:pointer; }
   .transport button.small { width:auto; font-size:.78rem; padding:0 .6rem; }
   .transport button.on-loop { background:#20452a; border-color:#2f6a3d; }
-  #seek { flex:1; min-width:180px; accent-color:#e05545; }
+  .seekcol { flex:1; min-width:180px; display:flex; flex-direction:column; gap:2px; }
+  #hitstrip { width:100%; height:22px; background:#10131a; border-radius:4px; cursor:pointer; display:block; }
+  #seek { width:100%; accent-color:#e05545; }
   #clock { font-variant-numeric:tabular-nums; color:#8b93a3; font-size:.85rem; min-width:6.5rem; text-align:right; }
   #speed { background:#20242e; color:#e6e9ef; border:1px solid #3a4150; border-radius:6px; padding:.35rem .4rem; }
   #loopinfo { color:#6fae7d; font-size:.78rem; min-width:7rem; font-variant-numeric:tabular-nums; }
@@ -63,6 +67,8 @@
   #sheetbox { background:#f5f2ea; border-radius:8px; margin-top:.7rem; max-height:70vh; overflow:auto; padding:.7rem; }
   #sheetbox svg { max-width:100%; height:auto; display:block; margin:0 auto .6rem; }
   #sheetbox object { width:100%; height:65vh; border:0; }
+  /* playback-synced measure highlight */
+  #sheetbox g.measure.cur :is(path, ellipse, rect, polygon, use) { fill:#c0392b; stroke:#c0392b; }
   details.sheet pre { background:#10131a; border-radius:8px; margin-top:.7rem; max-height:50vh; overflow:auto;
                       padding:.8rem 1rem; color:#c9d1de; font:12px/1.45 ui-monospace,Consolas,monospace; }
 </style>
@@ -76,6 +82,7 @@
   <div id="processing">
     <div class="spinner"></div>
     <div id="stage">starting…</div>
+    <div id="pbarwrap"><div id="pbar"></div></div>
     <div id="procerror"></div>
   </div>
 
@@ -94,7 +101,10 @@
       <button class="small" id="setB" title="loop end = now">B</button>
       <button class="small" id="clearAB" title="clear loop">&times;</button>
       <span id="loopinfo"></span>
-      <input type="range" id="seek" min="0" max="1000" value="0">
+      <div class="seekcol">
+        <canvas id="hitstrip" height="22" title="detected drum hits — click to jump"></canvas>
+        <input type="range" id="seek" min="0" max="1000" value="0">
+      </div>
       <span id="clock">0:00 / 0:00</span>
     </div>
 
@@ -127,6 +137,8 @@ const state = {
   duration: 0,
   playing: false,
   loopA: null, loopB: null,
+  timing: null,       // {tempo, downbeats, drum_hits} from the transcription
+  measures: [],       // g.measure elements of the engraved sheet, in order
 };
 
 // ---------- job polling ----------
@@ -142,6 +154,10 @@ async function poll() {
   }
   if (job.state !== 'done') {
     document.getElementById('stage').textContent = job.state + '…';
+    // Show a real progress bar while separation reports percentages.
+    const m = /(\d{1,3})%/.exec(job.state);
+    const wrap = document.getElementById('pbarwrap');
+    if (m) { wrap.style.display = 'block'; document.getElementById('pbar').style.width = `${Math.min(100, +m[1])}%`; }
     setTimeout(poll, 1500);
     return;
   }
@@ -171,13 +187,41 @@ async function loadStems(job) {
     state.stems.push({ name, el, gainNode, buffer, fader: 1.0, muted: false, solo: false });
     state.duration = Math.max(state.duration, buffer.duration);
   }
+  state.timing = job.timing || null;
   buildBoard(job);
-  buildSheet(job);
+  await buildSheet(job);
   buildTabs(job);
   document.getElementById('processing').style.display = 'none';
   document.getElementById('console').style.display = 'flex';
   updateClock();
+  drawHitStrip();
 }
+
+// ---------- hit markers (see the transcription against the audio) ----------
+const FAMILY_COLORS = { kick:'#e05545', snare:'#4aa3ff', hihat:'#d9c34a', toms:'#9a6bd0', cymbals:'#59c489', other:'#8b93a3' };
+
+function drawHitStrip() {
+  const canvas = document.getElementById('hitstrip');
+  const hits = (state.timing && state.timing.drum_hits) || [];
+  const W = canvas.clientWidth || canvas.parentElement.clientWidth || 600;
+  canvas.width = W;  // match CSS pixels so markers line up with the seek bar
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, canvas.height);
+  if (!hits.length || !state.duration) { canvas.style.display = 'none'; return; }
+  for (const [t, fam] of hits) {
+    const x = Math.round((t / state.duration) * (W - 1));
+    ctx.fillStyle = FAMILY_COLORS[fam] || FAMILY_COLORS.other;
+    // family decides the lane so kick/snare/cymbal patterns are readable
+    const lane = fam === 'kick' ? 14 : fam === 'snare' ? 8 : 2;
+    ctx.fillRect(x, lane, 1.5, 7);
+  }
+}
+window.addEventListener('resize', drawHitStrip);
+document.getElementById('hitstrip').addEventListener('click', (e) => {
+  if (!state.duration) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  seekTo(((e.clientX - rect.left) / rect.width) * state.duration);
+});
 
 async function buildTabs(job) {
   const host = document.getElementById('tabpanels');
@@ -256,12 +300,36 @@ async function buildSheet(job) {
       const res = await fetch(job.sheet_view.url);
       if (!res.ok) throw new Error(res.statusText);
       box.innerHTML = await res.text();
+      // Collect measures for playback sync (verovio marks them g.measure).
+      state.measures = [...box.querySelectorAll('g.measure')];
     } catch (e) {
       panel.style.display = 'none';
     }
   } else {
     box.innerHTML = `<object data="${job.sheet_view.url}" type="application/pdf">
       <p style="color:#333">PDF preview unavailable — use the download button below.</p></object>`;
+  }
+}
+
+// ---------- playback-synced sheet highlight ----------
+let curMeasure = -1;
+function syncSheet(t) {
+  const downbeats = (state.timing && state.timing.downbeats) || [];
+  const measures = state.measures || [];
+  if (!downbeats.length || !measures.length) return;
+  if (!document.getElementById('sheetpanel').open) return;
+  // index of the last downbeat at or before t
+  let lo = 0, hi = downbeats.length - 1, idx = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (downbeats[mid] <= t) { idx = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  idx = Math.min(idx, measures.length - 1);
+  if (idx !== curMeasure) {
+    if (curMeasure >= 0 && measures[curMeasure]) measures[curMeasure].classList.remove('cur');
+    measures[idx].classList.add('cur');
+    measures[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    curMeasure = idx;
   }
 }
 
@@ -311,6 +379,7 @@ function tick() {
   }
   if (t >= state.duration - 0.03 && state.loopB === null) { stopAll(); return; }
   updateClock();
+  syncSheet(t);
   requestAnimationFrame(tick);
 }
 function fmt(t) { return `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`; }

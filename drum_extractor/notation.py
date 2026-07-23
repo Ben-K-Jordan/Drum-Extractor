@@ -23,6 +23,9 @@ from .logging_utils import get_logger
 
 log = get_logger(__name__)
 
+GHOST_VELOCITY = 45  # at or below: parenthesized ghost note
+ACCENT_VELOCITY = 110  # at or above: accent mark
+
 
 def _m21():
     try:
@@ -119,6 +122,8 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
         elements = []
         stem_dir = "up" if voice_id == 1 else "down"
         note_dur = duration.Duration(dur_map[(voice_id, off)])
+        from music21 import articulations  # type: ignore
+
         for hit in hits:
             place = PLACEMENT.get(hit.instrument, PLACEMENT[SNARE])
             u = note.Unpitched()
@@ -127,6 +132,12 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
             u.notehead = place.notehead
             u.stemDirection = place.stem
             u.volume.velocity = hit.velocity
+            # Dynamics are half the groove: quiet hits engrave as ghost notes
+            # (parenthesized), loud ones get an accent mark.
+            if hit.velocity <= GHOST_VELOCITY:
+                u.noteheadParenthesis = True
+            elif hit.velocity >= ACCENT_VELOCITY:
+                u.articulations.append(articulations.Accent())
             elements.append((u, place))
 
         if len(elements) == 1:

@@ -31,6 +31,8 @@ class PipelineResult:
     bass_tab: Path | None = None
     guitar_midi: Path | None = None
     guitar_tab: Path | None = None
+    bass_gp: Path | None = None
+    guitar_gp: Path | None = None
     musicxml: Path | None = None
     pdf: Path | None = None
     drum_sonification: Path | None = None
@@ -47,6 +49,8 @@ class PipelineResult:
             ("bass tab", self.bass_tab),
             ("guitar MIDI", self.guitar_midi),
             ("guitar tab", self.guitar_tab),
+            ("bass GP5", self.bass_gp),
+            ("guitar GP5", self.guitar_gp),
             ("MusicXML", self.musicxml),
             ("drum sheet PDF", self.pdf),
             ("drum sonified", self.drum_sonification),
@@ -99,7 +103,12 @@ def run_pipeline(
         from .separation import separate
 
         notify("separating")
-        result.stems = separate(audio_path, song_dir / "stems", config.separation)
+        result.stems = separate(
+            audio_path,
+            song_dir / "stems",
+            config.separation,
+            progress=lambda f: notify(f"separating — {int(f * 100)}%"),
+        )
     else:
         # Allow re-running later stages on pre-existing stems.
         result.stems = _discover_existing_stems(song_dir / "stems")
@@ -198,6 +207,8 @@ def _do_bass(result: PipelineResult, config: PipelineConfig, song_dir: Path) -> 
         tab_path = song_dir / "bass.tab.txt"
         tab_path.write_text(render_ascii_tab(notes, config.bass))
         result.bass_tab = tab_path
+        result.bass_gp = _maybe_gp(notes, config.bass.tuning, song_dir / "bass.gp5",
+                                   result.transcription.tempo, "Bass", 33)
 
 
 def _do_guitar(result: PipelineResult, config: PipelineConfig, song_dir: Path) -> None:
@@ -212,6 +223,23 @@ def _do_guitar(result: PipelineResult, config: PipelineConfig, song_dir: Path) -
         tab_path = song_dir / "guitar.tab.txt"
         tab_path.write_text(render_guitar_tab(notes, config.guitar))
         result.guitar_tab = tab_path
+        result.guitar_gp = _maybe_gp(notes, config.guitar.tuning, song_dir / "guitar.gp5",
+                                     result.transcription.tempo, "Guitar", 30)
+
+
+def _maybe_gp(notes, tuning, path: Path, tempo, track_name: str, instrument: int) -> Path | None:
+    """Write a .gp5 if PyGuitarPro is installed; quietly skip otherwise."""
+    from .gp_export import gp_available, write_gp5
+
+    if not gp_available():
+        log.debug("PyGuitarPro not installed; skipping %s", path.name)
+        return None
+    try:
+        return write_gp5(notes, tuning, path, tempo=tempo, title=path.stem,
+                         track_name=track_name, instrument=instrument)
+    except Exception as exc:  # optional nicety; never fail the stage over it
+        log.warning("Guitar Pro export skipped (%s)", exc)
+        return None
 
 
 def _do_quantize(result: PipelineResult, config: PipelineConfig, ref_audio: Path) -> None:

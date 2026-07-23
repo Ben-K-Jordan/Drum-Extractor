@@ -35,11 +35,30 @@ def _resolve_device(requested: str) -> str:
     return "cpu"
 
 
-def separate(audio_path: str | Path, out_dir: str | Path, config: SeparationConfig | None = None) -> Stems:
+def _demucs_progress_fraction(d: dict) -> float | None:
+    """Overall 0..1 fraction from a demucs.api callback dict (best effort)."""
+    try:
+        models = max(1, int(d.get("models", 1) or 1))
+        length = float(d.get("audio_length", 0) or 0)
+        offset = float(d.get("segment_offset", 0) or 0)
+        within = min(1.0, offset / length) if length > 0 else 0.0
+        frac = (int(d.get("model_idx_in_bag", 0) or 0) + within) / models
+        return min(1.0, max(0.0, frac))
+    except Exception:
+        return None
+
+
+def separate(
+    audio_path: str | Path,
+    out_dir: str | Path,
+    config: SeparationConfig | None = None,
+    progress=None,
+) -> Stems:
     """Separate ``audio_path`` into stems under ``out_dir``.
 
     Returns a :class:`Stems` object with paths to the stems requested in
-    ``config.stems`` (drums + bass by default).
+    ``config.stems`` (drums + bass by default). ``progress``, if given, is
+    called with a 0..1 fraction as inference advances (API path only).
     """
     config = config or SeparationConfig()
     audio_path = Path(audio_path)
@@ -54,7 +73,7 @@ def separate(audio_path: str | Path, out_dir: str | Path, config: SeparationConf
         log.warning("Running Demucs on CPU — expect roughly 1-2x the track length per song.")
 
     try:
-        return _separate_api(audio_path, out_dir, config, device)
+        return _separate_api(audio_path, out_dir, config, device, progress)
     except MissingDependencyError:
         raise
     except (ImportError, AttributeError) as exc:
@@ -67,11 +86,21 @@ def separate(audio_path: str | Path, out_dir: str | Path, config: SeparationConf
         return _separate_cli(audio_path, out_dir, config, device)
 
 
-def _separate_api(audio_path: Path, out_dir: Path, config: SeparationConfig, device: str) -> Stems:
+def _separate_api(audio_path: Path, out_dir: Path, config: SeparationConfig, device: str, progress=None) -> Stems:
     try:
         from demucs.api import Separator  # type: ignore
     except ModuleNotFoundError as exc:
         raise MissingDependencyError("Source separation", "demucs", extra="separation") from exc
+
+    callback = None
+    if progress is not None:
+        def callback(d):  # noqa: ANN001 - demucs callback dict
+            frac = _demucs_progress_fraction(d if isinstance(d, dict) else {})
+            if frac is not None:
+                try:
+                    progress(frac)
+                except Exception:  # a UI callback must never break separation
+                    pass
 
     separator = Separator(
         model=config.model,
@@ -80,6 +109,7 @@ def _separate_api(audio_path: Path, out_dir: Path, config: SeparationConfig, dev
         overlap=config.overlap,
         segment=config.segment,  # None -> model default; lower to save GPU memory
         jobs=config.jobs,
+        callback=callback,
     )
     _origin, separated = separator.separate_audio_file(str(audio_path))
     return _save_stems(separated, out_dir, config, separator.samplerate)
