@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .config import SeparationConfig
-from .errors import AudioLoadError, MissingDependencyError
+from .errors import AudioLoadError, ExternalToolError, MissingDependencyError
 from .events import Stems
 from .logging_utils import get_logger
 
@@ -57,8 +57,13 @@ def separate(audio_path: str | Path, out_dir: str | Path, config: SeparationConf
         return _separate_api(audio_path, out_dir, config, device)
     except MissingDependencyError:
         raise
-    except Exception as exc:  # pragma: no cover - fall back to CLI on API quirks
-        log.warning("Demucs Python API path failed (%s); falling back to CLI.", exc)
+    except (ImportError, AttributeError) as exc:
+        # Only an API-shape mismatch (a Demucs version whose api module differs)
+        # justifies retrying via the CLI. Genuine runtime failures — a bad model
+        # name, undecodable input, OOM, or a blocked weights download — would
+        # fail identically through the CLI, so let them surface directly instead
+        # of masking the root cause behind a second doomed run.
+        log.warning("Demucs Python API unavailable (%s); trying the CLI.", exc)
         return _separate_cli(audio_path, out_dir, config, device)
 
 
@@ -132,14 +137,27 @@ def _separate_cli(audio_path: Path, out_dir: Path, config: SeparationConfig, dev
         subprocess.run(cmd, check=True)
     except FileNotFoundError as exc:
         raise MissingDependencyError("Source separation", "demucs", extra="separation") from exc
+    except subprocess.CalledProcessError as exc:
+        raise ExternalToolError(
+            f"Demucs CLI failed (exit {exc.returncode}). Check the model name "
+            f"('{config.model}') and that the input is a decodable audio file."
+        ) from exc
 
-    # Demucs CLI writes to <out_dir>/<model>/<track_name>/<stem>.<ext>
+    # Demucs CLI writes to <out_dir>/<model>/<track_name>/<stem>.<ext>. Move the
+    # requested stems up to the flat <out_dir>/<stem>.<ext> layout so they match
+    # the API path (_save_stems) and are found by _discover_existing_stems when a
+    # later run reuses stems with do_separation=False.
+    import shutil
+
     ext = "mp3" if config.mp3 else "wav"
     track_dir = out_dir / config.model / audio_path.stem
     stems = Stems()
     for name in config.stems:
         candidate = track_dir / f"{name}.{ext}"
         if candidate.exists():
-            setattr(stems, name, candidate)
-            log.info("  -> %s", candidate)
+            flat = out_dir / f"{name}.{ext}"
+            if candidate.resolve() != flat.resolve():
+                shutil.move(str(candidate), str(flat))
+            setattr(stems, name, flat)
+            log.info("  -> %s", flat)
     return stems

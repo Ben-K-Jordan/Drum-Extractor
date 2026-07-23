@@ -49,19 +49,23 @@ def transcribe_bass(bass_stem: str | Path, config: BassTranscriptionConfig | Non
     notes.sort(key=lambda n: (n.start, n.pitch))
 
     if config.refine_with_crepe:
-        notes = _refine_octaves_with_crepe(bass_stem, notes)
+        notes = _refine_octaves_with_crepe(bass_stem, notes, config.min_frequency)
 
     assign_tab(notes, config)
     log.info("Bass: %d notes transcribed", len(notes))
     return notes
 
 
-def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote]) -> list[BassNote]:
+def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote], min_frequency: float = 32.7) -> list[BassNote]:
     """Correct octave errors by comparing each note to torchcrepe's F0 estimate.
 
     Distorted bass makes pitch trackers latch onto a harmonic (usually an octave
     up). We compare basic-pitch's pitch to the median CREPE fundamental over the
     note; if CREPE is confidently ~12 semitones lower, we pull the note down.
+
+    ``fmin`` must not go below torchcrepe's lowest model bin (~31.8 Hz): a lower
+    fmin pins the Viterbi decode to bin 0 and collapses the whole F0 track to a
+    constant, so we clamp to at least C1 (32.7 Hz).
     """
     try:
         import numpy as np  # type: ignore
@@ -71,10 +75,11 @@ def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote]) -> list[B
     except ModuleNotFoundError as exc:
         raise MissingDependencyError("CREPE octave refinement", "torchcrepe", extra="bass-crepe") from exc
 
+    fmin = max(32.7, float(min_frequency))
     y, sr = librosa.load(str(bass_stem), sr=16000, mono=True)
     audio = torch.tensor(y)[None]
     hop = 160  # 10 ms at 16 kHz
-    f0 = torchcrepe.predict(audio, sr, hop_length=hop, fmin=30, fmax=500, model="full", batch_size=512, device="cpu")
+    f0 = torchcrepe.predict(audio, sr, hop_length=hop, fmin=fmin, fmax=500, model="full", batch_size=512, device="cpu")
     f0 = f0[0].cpu().numpy()
     times = np.arange(len(f0)) * hop / sr
 
@@ -109,6 +114,7 @@ def assign_tab(notes: list[BassNote], config: BassTranscriptionConfig) -> None:
     """
     tuning = config.tuning
     prev_fret = 5  # start hand around the 5th fret
+    unreachable = 0
     for n in notes:
         best: tuple[int, int] | None = None
         best_cost = 1e9
@@ -122,6 +128,15 @@ def assign_tab(notes: list[BassNote], config: BassTranscriptionConfig) -> None:
         if best is not None:
             n.string, n.fret = best
             prev_fret = best[1]
+        else:
+            unreachable += 1
+    if unreachable:
+        log.warning(
+            "%d bass note(s) fall outside the fretboard range (%s); they are marked 'x' in the tab "
+            "but retain their true pitch in the MIDI.",
+            unreachable,
+            f"tuning low={tuning[0]}, {config.frets} frets",
+        )
 
 
 def render_ascii_tab(notes: list[BassNote], config: BassTranscriptionConfig, columns: int = 80) -> str:
@@ -135,19 +150,25 @@ def render_ascii_tab(notes: list[BassNote], config: BassTranscriptionConfig, col
     lanes: list[list[str]] = [[] for _ in tuning]
     for n in notes:
         if n.string is None or n.fret is None:
-            continue
-        token = str(n.fret)
+            # Out-of-range note: keep it visible (and count-consistent with the
+            # MIDI) by marking it 'x' on the lowest string rather than dropping it.
+            token, target = "x", 0
+        else:
+            token, target = str(n.fret), n.string
         width = max(len(token) + 1, 3)
         for s in range(len(tuning)):
-            if s == n.string:
+            if s == target:
                 lanes[s].append(token.rjust(width - 1, "-") + "-")
             else:
                 lanes[s].append("-" * width)
 
+    # Right-justify string labels to a common width so rows with a 2-char
+    # accidental name (e.g. 'F#') stay column-aligned with 1-char names.
+    label_w = max((len(nm) for nm in string_names), default=1)
     lines = []
     for s in range(len(tuning) - 1, -1, -1):  # highest string on top
         body = "".join(lanes[s]) or "-" * 8
-        lines.append(f"{string_names[s]}|-{body}")
+        lines.append(f"{string_names[s].rjust(label_w)}|-{body}")
     return "\n".join(lines)
 
 

@@ -94,6 +94,12 @@ def run_pipeline(audio_path: str | Path, config: PipelineConfig | None = None) -
         ref = result.stems.drums or audio_path
         _try(result, "quantization", lambda: _do_quantize(result, config, ref))
 
+    # Persist the transcription IR NOW — before the optional, more fragile
+    # notation/sonify stages — so a late-stage failure can't discard the
+    # expensive separation + transcription + quantization work (the IR can be
+    # re-notated later via `drum-extractor notate transcription.json`).
+    _write_transcription_json(result.transcription, song_dir / "transcription.json")
+
     # --- Stage 4: notation ---
     if config.do_notation and result.transcription.drum_hits:
         _try(result, "notation", lambda: _do_notation(result, config, song_dir))
@@ -102,21 +108,27 @@ def run_pipeline(audio_path: str | Path, config: PipelineConfig | None = None) -
     if config.do_sonify and result.transcription.drum_hits:
         _try(result, "sonification", lambda: _do_sonify(result, song_dir))
 
-    _write_transcription_json(result.transcription, song_dir / "transcription.json")
     log.info("\n%s", result.summary())
     return result
 
 
 def _try(result: PipelineResult, label: str, fn) -> None:
-    """Run an optional stage, converting a missing dependency into a warning."""
+    """Run an optional stage, converting any failure into a recorded warning.
+
+    Optional stages must degrade gracefully: a missing dependency, a
+    DrumExtractorError, or an unexpected runtime error in one stage is logged
+    and recorded but does not abort the run or prevent later independent stages.
+    (Stage 1 separation is deliberately NOT wrapped — it is the core and its
+    failures should surface.)
+    """
     try:
         fn()
-    except MissingDependencyError as exc:
+    except (MissingDependencyError, DrumExtractorError) as exc:
         msg = f"{label}: {exc}"
         log.warning(msg)
         result.warnings.append(msg)
-    except DrumExtractorError as exc:
-        msg = f"{label}: {exc}"
+    except Exception as exc:  # keep the pipeline's graceful-degradation contract
+        msg = f"{label}: unexpected {type(exc).__name__}: {exc}"
         log.warning(msg)
         result.warnings.append(msg)
 

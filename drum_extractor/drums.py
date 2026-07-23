@@ -135,8 +135,13 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
     high = freqs >= 6000
 
     hits: list[DrumHit] = []
-    band_vals = {"low": [], "mid": [], "high": []}
-    per_onset = []
+    vel = config.default_velocity
+    # A band fires only if it holds a meaningful SHARE of THIS onset's energy,
+    # not merely because it clears the corpus median (which ~half of onsets do
+    # by definition, fabricating phantom kicks/snares on cymbal-only material).
+    # Fractions are relative to each onset's own total, so an absent instrument
+    # contributes negligible share and does not fire.
+    KICK_SHARE, SNARE_SHARE, HIHAT_SHARE = 0.35, 0.35, 0.30
     for t in onset_times:
         frame = librosa.time_to_frames(t, sr=sr, hop_length=512)
         frame = int(min(max(frame, 0), stft.shape[1] - 1))
@@ -144,27 +149,24 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
         e_low = float(window[low].sum())
         e_mid = float(window[mid].sum())
         e_high = float(window[high].sum())
-        per_onset.append((t, e_low, e_mid, e_high))
-        band_vals["low"].append(e_low)
-        band_vals["mid"].append(e_mid)
-        band_vals["high"].append(e_high)
+        total = e_low + e_mid + e_high + 1e-12
+        f_low, f_mid, f_high = e_low / total, e_mid / total, e_high / total
 
-    # Adaptive thresholds: a band "fires" if it clears its own median.
-    thr = {b: (np.median(v) if v else 0.0) for b, v in band_vals.items()}
-    for t, e_low, e_mid, e_high in per_onset:
         fired = False
-        if e_low >= thr["low"]:
-            hits.append(DrumHit(time=float(t), instrument=KICK, velocity=config.default_velocity))
+        if f_low >= KICK_SHARE:
+            hits.append(DrumHit(time=float(t), instrument=KICK, velocity=vel))
             fired = True
-        if e_high >= thr["high"]:
-            hits.append(DrumHit(time=float(t), instrument=HIHAT_CLOSED, velocity=config.default_velocity))
+        if f_high >= HIHAT_SHARE:
+            hits.append(DrumHit(time=float(t), instrument=HIHAT_CLOSED, velocity=vel))
             fired = True
-        # Snare when mid dominates, or as the default if nothing else fired.
-        if e_mid >= thr["mid"] and e_mid >= e_low:
-            hits.append(DrumHit(time=float(t), instrument=SNARE, velocity=config.default_velocity))
+        if f_mid >= SNARE_SHARE:
+            hits.append(DrumHit(time=float(t), instrument=SNARE, velocity=vel))
             fired = True
         if not fired:
-            hits.append(DrumHit(time=float(t), instrument=SNARE, velocity=config.default_velocity))
+            # No band dominant enough; assign the single strongest band so the
+            # onset isn't lost, rather than defaulting to a phantom snare.
+            dominant = max((f_low, KICK), (f_mid, SNARE), (f_high, HIHAT_CLOSED), key=lambda x: x[0])[1]
+            hits.append(DrumHit(time=float(t), instrument=dominant, velocity=vel))
 
     hits.sort(key=lambda h: h.time)
     log.info("Onset fallback: %d onsets -> %d hits", len(onset_times), len(hits))

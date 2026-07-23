@@ -32,10 +32,18 @@ def _m21():
     return music21
 
 
-def _offset_ql(hit, beats_per_bar: int, tempo: float | None) -> float:
-    """Quarter-length offset of a hit from the start of the piece."""
+def _offset_ql(hit, beats_per_bar: int, beat_unit: int, tempo: float | None) -> float:
+    """Quarter-length offset of a hit from the start of the piece.
+
+    ``hit.beat`` is in beat units (0..beats_per_bar); one beat is ``4/beat_unit``
+    quarter-lengths, so compound/non-quarter meters (6/8, cut time) are placed
+    correctly rather than assuming beat == quarter.
+    """
     if hit.bar is not None and hit.beat is not None:
-        return (hit.bar - 1) * beats_per_bar + hit.beat
+        ql_per_beat = 4.0 / beat_unit
+        return ((hit.bar - 1) * beats_per_bar + hit.beat) * ql_per_beat
+    # No bar/beat annotation (quantization skipped): derive from wall-clock time.
+    # tempo/BPM is quarter-note based, so seconds*bpm/60 is already quarter-lengths.
     bpm = tempo or 120.0
     return hit.time * bpm / 60.0
 
@@ -74,7 +82,7 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
     groups: dict[tuple[int, float], list] = defaultdict(list)
     for hit in transcription.drum_hits:
         place = PLACEMENT.get(hit.instrument, PLACEMENT[SNARE])
-        off = _offset_ql(hit, beats_per_bar, transcription.tempo)
+        off = _offset_ql(hit, beats_per_bar, beat_unit, transcription.tempo)
         off = round(off / grid_ql) * grid_ql
         groups[(place.voice, off)].append(hit)
 
@@ -84,8 +92,12 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
 
     # A drum note lasts until the next onset in its own voice (standard drum
     # notation), so straight 8ths read as 8ths rather than 16th-plus-rest. We
-    # quantize that gap to the grid and cap it at one bar; notes that cross a
-    # barline are split into ties automatically by makeMeasures.
+    # quantize that gap to the grid, cap it at one bar, and — critically — never
+    # let it cross a barline. music21's makeMeasures does NOT split an
+    # over-long note into tied notes; it packs the overflow into the same
+    # measure, producing an overfull/malformed bar. Capping at the remaining
+    # space in the bar keeps every measure well-formed (the gap is filled by
+    # rests), which is correct for onset-based drum notation.
     bar_ql = beats_per_bar * (4.0 / beat_unit)
     offsets_by_voice: dict[int, list[float]] = defaultdict(list)
     for (voice_id, off) in groups:
@@ -95,7 +107,12 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
         offs.sort()
         for i, off in enumerate(offs):
             gap = (offs[i + 1] - off) if i + 1 < len(offs) else grid_ql
-            dur_map[(vid, off)] = min(bar_ql, max(grid_ql, round(gap / grid_ql) * grid_ql))
+            dur = min(bar_ql, max(grid_ql, round(gap / grid_ql) * grid_ql))
+            pos_in_bar = off - (int(off // bar_ql) * bar_ql)
+            remaining = bar_ql - pos_in_bar
+            if remaining >= grid_ql - 1e-9:
+                dur = min(dur, remaining)
+            dur_map[(vid, off)] = dur
 
     for (voice_id, off), hits in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         elements = []

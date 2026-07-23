@@ -76,23 +76,31 @@ def audio_separator_drums(mix_path: str | Path, out_dir: str | Path, model: str)
     if exe is None:
         raise MissingDependencyError("Ensemble second model", "audio-separator", extra="ensemble")
 
+    # Start from a clean temp dir so a stale drums stem from a previous run
+    # can't be mistaken for this run's output.
     out_dir = Path(out_dir)
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         exe, str(mix_path),
         "--model_filename", model,
         "--output_dir", str(out_dir),
         "--single_stem", "Drums",
+        # Force WAV: recent python-audio-separator defaults the CLI to FLAC,
+        # which our glob (and the averaging step) would otherwise miss.
+        "--output_format", "WAV",
     ]
     log.info("Running audio-separator: %s", " ".join(cmd))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise ExternalToolError(f"audio-separator failed ({proc.returncode}): {proc.stderr.strip()[:400]}")
 
-    candidates = sorted(out_dir.glob("*[Dd]rums*.wav"))
+    # Accept either extension defensively; pick the most recently written match.
+    candidates = list(out_dir.glob("*[Dd]rums*.wav")) + list(out_dir.glob("*[Dd]rums*.flac"))
     if not candidates:
         raise ExternalToolError("audio-separator produced no drums stem.")
-    return candidates[0]
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def ensemble_drums(mix_path: str | Path, demucs_drums: str | Path, out_dir: str | Path, model: str) -> Path:

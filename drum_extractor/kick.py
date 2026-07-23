@@ -43,6 +43,12 @@ def detect_kick_onsets(
 
     y, sr = librosa.load(str(drum_stem), sr=sr, mono=True)
     sos = butter(4, cutoff_hz, btype="low", fs=sr, output="sos")
+    # sosfiltfilt pads by ~3*(2*n_sections+1) samples and raises on shorter
+    # input; guard so a truncated/near-empty stem can't crash transcription.
+    padlen = 3 * (2 * sos.shape[0] + 1)
+    if y.size <= padlen:
+        log.warning("Drum stem too short (%d samples) for the kick booster; skipping.", int(y.size))
+        return []
     y_low = sosfiltfilt(sos, y).astype(np.float32)
 
     hop = 128  # ~2.9 ms at 44.1k -> fine enough for fast feet
@@ -69,7 +75,12 @@ def boost_double_kick(
     the main transcriber already found.
     """
     kick_times = detect_kick_onsets(drum_stem, cutoff_hz=cutoff_hz, min_gap_ms=min_gap_ms)
-    existing = sorted(h.time for h in hits if h.instrument == KICK)
+    # Snapshot the main-transcription kicks. Recovered kicks are de-duplicated
+    # ONLY against this fixed snapshot, never against each other, so genuinely
+    # distinct fast kicks (already spaced >= min_gap_ms by the detector) all
+    # survive. Previously we insort-ed each added kick, so a recovered kick
+    # would fall inside the next one's merge window and get dropped every-other.
+    original = sorted(h.time for h in hits if h.instrument == KICK)
     window = merge_window_ms / 1000.0
 
     import bisect
@@ -77,15 +88,10 @@ def boost_double_kick(
     added = 0
     out = list(hits)
     for t in kick_times:
-        idx = bisect.bisect_left(existing, t)
-        near = False
-        for j in (idx - 1, idx):
-            if 0 <= j < len(existing) and abs(existing[j] - t) <= window:
-                near = True
-                break
+        idx = bisect.bisect_left(original, t)
+        near = any(0 <= j < len(original) and abs(original[j] - t) <= window for j in (idx - 1, idx))
         if not near:
             out.append(DrumHit(time=t, instrument=KICK, velocity=velocity))
-            bisect.insort(existing, t)
             added += 1
     out.sort(key=lambda h: h.time)
     log.info("Double-kick booster: %d kick onsets detected, %d new kicks added", len(kick_times), added)

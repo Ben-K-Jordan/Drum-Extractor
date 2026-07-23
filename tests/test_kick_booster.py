@@ -40,6 +40,21 @@ def test_detects_most_fast_kicks(tmp_path):
     assert len(onsets) >= n - 3, f"only found {len(onsets)}/{n} fast kicks"
 
 
+def test_booster_does_not_decimate_fast_kicks(tmp_path):
+    """Regression (audit M3): recovered kicks must not cannibalize each other.
+
+    With the old insort-based dedup, a 40ms merge window dropped genuine kicks
+    ~30-45ms apart. From an empty starting set every detected kick must survive.
+    """
+    stem = tmp_path / "fast.wav"
+    n = _fast_double_kick(stem, n_kicks=16, gap_s=0.045)  # ~200 BPM 16ths
+    detected = detect_kick_onsets(stem, min_gap_ms=30)
+    boosted = boost_double_kick([], stem)  # no pre-existing kicks
+    kept = sum(1 for h in boosted if h.instrument == KICK)
+    assert kept == len(detected), f"decimated: kept {kept} of {len(detected)} detected"
+    assert kept >= n - 4  # detector recovers most of the 16 real kicks
+
+
 def test_booster_adds_missing_kicks_without_doubling(tmp_path):
     stem = tmp_path / "kick.wav"
     _fast_double_kick(stem, n_kicks=16, gap_s=0.075)

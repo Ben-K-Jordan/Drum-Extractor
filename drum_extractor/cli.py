@@ -152,14 +152,14 @@ def _cmd_transcribe_bass(args) -> int:
 
 def _cmd_notate(args) -> int:
     from .events import Transcription
-    from .midi_io import read_drum_hits
+    from .midi_io import read_drum_hits, read_drum_tempo
     from .notation import notate_drums
 
     source = Path(args.source)
     if source.suffix == ".json":
         transcription = Transcription.from_dict(json.loads(source.read_text()))
-    else:  # treat as a drum MIDI
-        transcription = Transcription(drum_hits=read_drum_hits(source))
+    else:  # treat as a drum MIDI — carry its embedded tempo so note positions are correct
+        transcription = Transcription(drum_hits=read_drum_hits(source), tempo=read_drum_tempo(source))
 
     out_dir = Path(args.output) / source.stem
     results = notate_drums(

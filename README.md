@@ -188,7 +188,7 @@ mix); use `--grid 32` for double-kick; feed the cleanest/DI bass you have.
 
 ### What's actually been executed (not just written)
 
-Verified by running against the real libraries (26 passing tests + manual runs):
+Verified by running against the real libraries (38 passing tests + manual runs):
 
 - **MIDI I/O** — drum & bass write/read round-trip (pretty_midi).
 - **Stage 2a (onset), 3 (librosa), 4 (music21)** — full pipeline run on synthetic
@@ -201,14 +201,29 @@ Verified by running against the real libraries (26 passing tests + manual runs):
 - **Phase 4** — double-kick booster recovers fast kicks (200 BPM synthetic test);
   ensemble averaging and sonification tested; full pipeline run with them enabled.
 
-Two bugs were found and fixed this way: a NumPy-2 tempo-array crash in the librosa
-quantizer, and duplicate hits when two onsets snap to the same grid slot.
+### Adversarial audit
+
+A 9-way parallel audit (static review of every module + dynamic testing in a
+real-dependency venv) with per-finding verification surfaced **16 confirmed
+defects** (10 false positives were rejected), all now fixed with regression
+tests. The most important:
+
+- **Anacrusis crash (high):** songs starting on a pickup produced a negative beat
+  that crashed the whole notation stage on the default madmom backend. Fixed.
+- **Overfull measures (high):** notes crossing a barline weren't split, corrupting
+  the engraved bars. Now capped at the barline so every measure is well-formed.
+- **`--crepe` fully broken (high):** `fmin=30` sat below torchcrepe's lowest bin and
+  collapsed the whole pitch track, silently corrupting correct low notes. Fixed.
+- **Phantom drum hits (medium):** the onset fallback's median threshold fabricated
+  kicks/snares on ~half of all onsets. Replaced with per-onset energy shares.
+- Plus non-120-BPM last-bar mislabeling, non-quarter-meter placement, tempo-less
+  `.mid` notation, IR-persistence ordering, and several robustness/UX fixes.
 
 ### Known rough edges / good first customizations
-- **Drum durations & quantization** — notes last until the next onset in their voice; the grid choice (`--grid`) dominates readability. Tune per song.
 - **Kit mapping** — edit `PLACEMENT` / `CANONICAL_TO_GM` in `drum_extractor/gm_drum_map.py` to match your kit or notation preferences.
 - **ADTOF command** — the exact CLI varies by install; override `DrumTranscriptionConfig.adtof_command` if needed (`{input}`/`{output}` are substituted).
 - **Voice numbering** — music21 exports voices as 0/1; MuseScore maps them fine, but you can post-process the MusicXML if you need strict 1/2.
+- **Grid choice** — `--grid` dominates readability (16 for rock, 32 for double-kick); tune per song.
 
 ---
 

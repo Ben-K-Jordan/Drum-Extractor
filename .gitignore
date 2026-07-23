@@ -11,6 +11,8 @@ env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
 # Model weights / caches (downloaded on demand, can be large)
 *.pt

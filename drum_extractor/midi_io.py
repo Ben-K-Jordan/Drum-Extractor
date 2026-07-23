@@ -20,7 +20,9 @@ def _pretty_midi():
     try:
         import pretty_midi  # type: ignore
     except ModuleNotFoundError as exc:  # pragma: no cover - env dependent
-        raise MissingDependencyError("MIDI export/import", "pretty_midi", extra="midi") from exc
+        # pretty_midi is a core dependency, not an extra, so point at the package
+        # directly (there is no `drum-extractor[midi]` extra).
+        raise MissingDependencyError("MIDI export/import", "pretty_midi") from exc
     return pretty_midi
 
 
@@ -89,6 +91,23 @@ def read_drum_hits(path: Path, default_velocity: int = 96) -> list[DrumHit]:
             )
     hits.sort(key=lambda h: h.time)
     return hits
+
+
+def read_drum_tempo(path: Path) -> float | None:
+    """Read the first tempo (BPM) embedded in a MIDI file, if any.
+
+    Used so ``notate <file>.mid`` engraves at the file's real tempo instead of
+    defaulting to 120 BPM (which scales every note's position for other tempos).
+    """
+    pm = _pretty_midi()
+    midi = pm.PrettyMIDI(str(path))
+    _times, tempi = midi.get_tempo_changes()
+    if len(tempi):
+        return float(tempi[0])
+    try:
+        return float(midi.estimate_tempo())
+    except Exception:  # pragma: no cover - estimate_tempo needs >=2 notes
+        return None
 
 
 def read_bass_notes(path: Path) -> list[BassNote]:

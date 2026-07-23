@@ -145,17 +145,47 @@ def _snap(t: float, grid: list[float]) -> float:
 
 
 def _annotate_bar_beat(transcription: Transcription, bar_starts: list[float], config: QuantizeConfig) -> None:
-    """Fill in 1-indexed bar number and beat-within-bar (in quarter notes)."""
+    """Fill in 1-indexed bar number and beat-within-bar (in beat units).
+
+    Robust to (a) hits before the first detected downbeat — a pickup/anacrusis,
+    common with the madmom backend where ``downbeats[0]`` can be later than
+    ``beats[0]`` — which would otherwise produce a negative beat and crash the
+    notation stage; and (b) the final bar, whose length is estimated from the
+    surrounding bars / tempo rather than a hardcoded 2.0s (only correct at
+    120 BPM 4/4).
+    """
     if not bar_starts:
         return
     import bisect
 
+    # Representative bar length: median of detected inter-downbeat gaps, else
+    # derived from tempo, else a last-resort constant.
+    spans = sorted(b - a for a, b in zip(bar_starts, bar_starts[1:]) if b > a)
+    if spans:
+        default_span = spans[len(spans) // 2]
+    elif transcription.tempo:
+        default_span = config.beats_per_bar * 60.0 / transcription.tempo
+    else:
+        default_span = 2.0
+
+    # Prepend synthetic bar starts so any pickup hits before the first downbeat
+    # land in a real earlier bar with a non-negative beat (capped so a wildly
+    # early stray onset can't explode the bar count).
+    starts = list(bar_starts)
+    earliest = min((h.time for h in transcription.drum_hits), default=starts[0])
+    guard = 0
+    while earliest < starts[0] - 1e-9 and guard < 64:
+        starts.insert(0, starts[0] - default_span)
+        guard += 1
+
+    bpb = config.beats_per_bar
     for hit in transcription.drum_hits:
-        bar_idx = bisect.bisect_right(bar_starts, hit.time) - 1
+        bar_idx = bisect.bisect_right(starts, hit.time) - 1
         if bar_idx < 0:
             bar_idx = 0
         hit.bar = bar_idx + 1
-        bar_start = bar_starts[bar_idx]
-        bar_end = bar_starts[bar_idx + 1] if bar_idx + 1 < len(bar_starts) else bar_start + 2.0
+        bar_start = starts[bar_idx]
+        bar_end = starts[bar_idx + 1] if bar_idx + 1 < len(starts) else bar_start + default_span
         span = max(bar_end - bar_start, 1e-6)
-        hit.beat = round((hit.time - bar_start) / span * config.beats_per_bar, 4)
+        beat = (hit.time - bar_start) / span * bpb
+        hit.beat = round(min(max(beat, 0.0), bpb), 4)
