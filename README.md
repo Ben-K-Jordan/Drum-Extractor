@@ -103,8 +103,11 @@ drum-extractor notate           output/song/transcription.json
 drum-extractor run song.mp3 --grid 32 --boost-double-kick --drum-backend onset
 
 # Metal separation upgrade: blend a second drum model with Demucs (needs
-# `pip install audio-separator`)
-drum-extractor run song.mp3 --ensemble-model model_bs_roformer_ep_317_sdr_12.9755.ckpt
+# `pip install audio-separator`); avg_fft/min_fft = UVR-style spectrogram blending
+drum-extractor run song.mp3 --ensemble-model model_bs_roformer_ep_317_sdr_12.9755.ckpt --ensemble-algorithm min_fft
+
+# Long track on a small GPU: shrink the Demucs split segment
+drum-extractor run song.mp3 --segment 10
 ```
 
 Outputs land in `output/<song>/`:
@@ -169,7 +172,11 @@ hits = transcribe_drums(stems.drums)
 skeleton you verify by ear. No 2026 tool escapes this.
 
 **Levers that help:** always transcribe from the isolated drum stem (never the
-mix); use `--grid 32` for double-kick; feed the cleanest/DI bass you have.
+mix); use `--grid 32` for double-kick; feed the cleanest/DI bass you have. For
+steady-tempo songs, `QuantizeConfig(grid_mode="constant", fixed_tempo=...)`
+builds a uniform note-seq-style grid that shrugs off tracker dropouts; and
+`QuantizeConfig(min_bpm/max_bpm)` widens madmom's 55–215 BPM search for fast
+material.
 
 ---
 
@@ -245,7 +252,7 @@ comparison also caught real issues, now fixed:
 ### Known rough edges / good first customizations
 - **Kit mapping** — edit `PLACEMENT` / `CANONICAL_TO_GM` in `drum_extractor/gm_drum_map.py` to match your kit or notation preferences.
 - **ADTOF command** — defaults to ADTOF-pytorch's `adtof --audio {input} --out {output}` (writes MIDI); output is detected by content, so MIDI or `time\tpitch` text both work. Override `DrumTranscriptionConfig.adtof_command` for a different install (e.g. `omnizart drum transcribe`).
-- **Voice numbering** — music21 exports voices as 0/1; MuseScore maps them fine, but you can post-process the MusicXML if you need strict 1/2.
+- **Voice numbering** — exported MusicXML uses the standard convention: voice 1 = hands (stems up), voice 2 = feet (stems down).
 - **Grid choice** — `--grid` dominates readability (16 for rock, 32 for double-kick); tune per song.
 
 ---

@@ -1,7 +1,7 @@
-# Minimal quick-start: the always-works core + Stage 1 separation (the MVP).
-# For the full pipeline, prefer the extras:  pip install -e ".[all]"
-# and see the README for ADTOF, madmom, and MuseScore setup.
-
-numpy>=1.22
-pretty_midi>=0.2.10
-demucs>=4.0.0
+# Quick start: the package (core deps) plus Stage 1 separation — the MVP.
+# Single source of truth for versions is pyproject.toml; this file is only a
+# convenience pointer so `pip install -r requirements.txt` does the right thing.
+#
+# Full pipeline:  pip install -e ".[all]"
+# Drum backend:   pip install -e ".[adtof]"   (see README for MuseScore/madmom)
+-e .[separation]

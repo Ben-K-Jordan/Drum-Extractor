@@ -38,13 +38,45 @@ def _best_lag(a, b, max_lag: int):
     return int((np.arange(lo, hi) - center)[np.argmax(corr[lo:hi])])
 
 
-def average_stems(paths: list[str | Path], out_path: str | Path, align: bool = True) -> Path:
-    """Blend several stem files into one by time-aligned averaging.
+def _combine_fft(arrays, mode: str):
+    """Blend equal-shape stems in the spectrogram domain (UVR-style).
+
+    Magnitudes are combined per time-frequency bin — ``avg_fft`` averages them,
+    ``min_fft`` keeps the minimum (suppressing artifacts only one model produced)
+    — and the first stem's phase is reused for reconstruction.
+    """
+    import numpy as np  # type: ignore
+    from scipy.signal import istft, stft  # type: ignore
+
+    n, ch = arrays[0].shape
+    out = np.zeros((n, ch))
+    for c in range(ch):
+        specs = [stft(a[:, c], nperseg=4096, noverlap=3072)[2] for a in arrays]
+        mags = np.stack([np.abs(z) for z in specs])
+        mag = mags.mean(axis=0) if mode == "avg_fft" else mags.min(axis=0)
+        _, rec = istft(mag * np.exp(1j * np.angle(specs[0])), nperseg=4096, noverlap=3072)
+        out[:, c] = rec[:n] if len(rec) >= n else np.pad(rec, (0, n - len(rec)))
+    return out
+
+
+def average_stems(
+    paths: list[str | Path],
+    out_path: str | Path,
+    align: bool = True,
+    algorithm: str = "avg_wave",
+) -> Path:
+    """Blend several stem files into one, time-aligned.
 
     Different separators emit the same transient a few samples apart, so we
     cross-correlate each stem against the first and shift it into phase before
-    averaging — otherwise the kick/snare attacks comb-filter and cancel (the
-    opposite of the intended bleed reduction). Result is peak-normalised.
+    blending — otherwise the kick/snare attacks comb-filter and cancel (the
+    opposite of the intended bleed reduction).
+
+    ``algorithm``: "avg_wave" (waveform mean), or spectrogram-domain "avg_fft" /
+    "min_fft" (UVR-style; min suppresses model-specific artifacts hardest).
+    Shorter stems are zero-padded to the longest; the result is attenuated only
+    if it would clip (never boosted, so levels stay comparable to the plain
+    Demucs stem).
     """
     try:
         import numpy as np  # type: ignore
@@ -54,6 +86,8 @@ def average_stems(paths: list[str | Path], out_path: str | Path, align: bool = T
 
     if not paths:
         raise ValueError("average_stems needs at least one path")
+    if algorithm not in ("avg_wave", "avg_fft", "min_fft"):
+        raise ValueError(f"Unknown ensemble algorithm: {algorithm!r}")
 
     arrays = []
     sr = None
@@ -64,9 +98,19 @@ def average_stems(paths: list[str | Path], out_path: str | Path, align: bool = T
             raise ExternalToolError(f"Sample-rate mismatch averaging stems: {file_sr} vs {sr}")
         arrays.append(y)
 
-    min_len = min(a.shape[0] for a in arrays)
+    # Zero-pad to the longest (UVR-style) instead of discarding the tail, and
+    # broadcast mono up to the widest channel count.
+    max_len = max(a.shape[0] for a in arrays)
     max_ch = max(a.shape[1] for a in arrays)
-    arrays = [a[:min_len] for a in arrays]
+    norm = []
+    for a in arrays:
+        if a.shape[0] < max_len:
+            log.debug("Padding stem by %d samples to match the longest", max_len - a.shape[0])
+            a = np.pad(a, ((0, max_len - a.shape[0]), (0, 0)))
+        if a.shape[1] < max_ch:
+            a = np.repeat(a[:, :1], max_ch, axis=1)
+        norm.append(a)
+    arrays = norm
 
     if align and len(arrays) > 1:
         ref = arrays[0].mean(axis=1)
@@ -77,19 +121,20 @@ def average_stems(paths: list[str | Path], out_path: str | Path, align: bool = T
                 arrays[i] = np.roll(arrays[i], lag, axis=0)
                 log.info("Aligned stem %d by %+d samples (%.1f ms)", i, lag, 1000.0 * lag / sr)
 
-    acc = np.zeros((min_len, max_ch), dtype=np.float64)
-    for a in arrays:
-        if a.shape[1] == 1 and max_ch > 1:
-            a = np.repeat(a, max_ch, axis=1)
-        acc[:, : a.shape[1]] += a
-    acc /= len(arrays)
+    if algorithm == "avg_wave":
+        acc = np.stack(arrays).mean(axis=0)
+    else:
+        acc = _combine_fft(arrays, algorithm)
 
-    peak = float(np.max(np.abs(acc))) or 1.0
-    acc = (acc / peak * 0.98).astype("float32")
+    # Attenuate-only (like demucs save_audio's rescale): never boost a quiet stem.
+    peak = float(np.max(np.abs(acc)))
+    if peak > 0.98:
+        acc = acc * (0.98 / peak)
+    acc = acc.astype("float32")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_path), acc, sr)
-    log.info("Averaged %d stems -> %s", len(paths), out_path)
+    log.info("Blended %d stems (%s) -> %s", len(paths), algorithm, out_path)
     return out_path
 
 
@@ -131,8 +176,14 @@ def audio_separator_drums(mix_path: str | Path, out_dir: str | Path, model: str)
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
-def ensemble_drums(mix_path: str | Path, demucs_drums: str | Path, out_dir: str | Path, model: str) -> Path:
-    """Blend the Demucs drums with a second model's drums, returning the averaged stem.
+def ensemble_drums(
+    mix_path: str | Path,
+    demucs_drums: str | Path,
+    out_dir: str | Path,
+    model: str,
+    algorithm: str = "avg_wave",
+) -> Path:
+    """Blend the Demucs drums with a second model's drums, returning the blended stem.
 
     Falls back to the Demucs drums unchanged if the second model is unavailable,
     so callers can request the upgrade without hard-failing when it isn't set up.
@@ -143,4 +194,4 @@ def ensemble_drums(mix_path: str | Path, demucs_drums: str | Path, out_dir: str 
     except (MissingDependencyError, ExternalToolError) as exc:
         log.warning("Ensemble skipped (%s); using Demucs drums as-is.", exc)
         return Path(demucs_drums)
-    return average_stems([demucs_drums, second], out_dir / "drums_ensemble.wav")
+    return average_stems([demucs_drums, second], out_dir / "drums_ensemble.wav", algorithm=algorithm)

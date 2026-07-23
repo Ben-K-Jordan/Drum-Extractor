@@ -19,7 +19,8 @@ class DrumHit:
 
     ``time`` is seconds from the start of the audio. After quantization it is
     snapped to the grid and ``bar``/``beat`` are filled in (1-indexed bar, and
-    beat position in quarter notes from the bar start).
+    beat position within the bar in BEAT UNITS of the time signature — e.g.
+    0..5 in 6/8 — not quarter notes; notation scales by ``4/beat_unit``).
     """
 
     time: float

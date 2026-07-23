@@ -23,10 +23,17 @@ class SeparationConfig:
     mp3: bool = False  # write mp3 instead of wav
     mp3_bitrate: int = 320
     jobs: int = 0  # parallel jobs (0 = auto)
+    # Demucs split-segment length in seconds (None = model default). Lower it to
+    # fit long tracks in less GPU memory.
+    segment: int | None = None
     # Phase 4: blend a second drums model (an audio-separator model filename,
     # e.g. a RoFormer/SCNet drum checkpoint) with Demucs to cut guitar bleed on
     # dense metal. None = Demucs only. Requires `pip install audio-separator`.
     ensemble_drums_model: str | None = None
+    # How the two drum stems are blended: "avg_wave" (time-aligned waveform
+    # mean), or spectrogram-domain "avg_fft" / "min_fft" (UVR-style; min_fft
+    # suppresses model-specific artifacts hardest).
+    ensemble_algorithm: str = "avg_wave"
 
 
 @dataclass
@@ -72,7 +79,18 @@ class QuantizeConfig:
     grid: int = 16  # 1/grid note resolution: 16 = sixteenths, 32 for fast double-kick
     beats_per_bar: int = 4
     beat_unit: int = 4
-    fixed_tempo: float | None = None  # skip tempo detection if you already know it
+    fixed_tempo: float | None = None  # constrain beat tracking to this BPM if known
+    # "tracked": snap to the detected (possibly drifting) beat grid.
+    # "constant": build a uniform note-seq-style grid at fixed_tempo (or the
+    # detected tempo), anchored at the first downbeat — more robust for songs
+    # with a steady tempo, where a single missed beat would otherwise halve the
+    # local grid resolution.
+    grid_mode: str = "tracked"
+    # Tempo search range for the trackers (madmom min_bpm/max_bpm; librosa
+    # start_bpm midpoint). madmom's 55-215 default octave-errors on fast
+    # double-kick, so widen for a metal preset. Ignored when fixed_tempo is set.
+    min_bpm: float | None = None
+    max_bpm: float | None = None
 
 
 @dataclass

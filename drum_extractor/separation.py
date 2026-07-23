@@ -78,6 +78,7 @@ def _separate_api(audio_path: Path, out_dir: Path, config: SeparationConfig, dev
         device=device,
         shifts=config.shifts,
         overlap=config.overlap,
+        segment=config.segment,  # None -> model default; lower to save GPU memory
         jobs=config.jobs,
     )
     _origin, separated = separator.separate_audio_file(str(audio_path))
@@ -126,6 +127,8 @@ def _separate_cli(audio_path: Path, out_dir: Path, config: SeparationConfig, dev
         "--overlap", str(config.overlap),
         "-o", str(out_dir),
     ]
+    if config.segment:
+        cmd += ["--segment", str(config.segment)]
     if config.mp3:
         cmd += ["--mp3", "--mp3-bitrate", str(config.mp3_bitrate)]
     if two_stems:

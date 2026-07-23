@@ -31,12 +31,20 @@ def quantize(transcription: Transcription, audio_path: str | Path, config: Quant
         return transcription
 
     tempo, beats, downbeats = _detect_beats(Path(audio_path), config)
+
+    hit_times = [h.time for h in transcription.drum_hits]
+    t_lo = min(hit_times) if hit_times else None
+    t_hi = max(hit_times) if hit_times else None
+
+    if config.grid_mode == "constant":
+        tempo, beats, downbeats = _constant_beats(tempo, beats, downbeats, config, t_lo, t_hi)
+
     transcription.tempo = tempo
     transcription.beats = beats
     transcription.downbeats = downbeats
     transcription.time_signature = (config.beats_per_bar, config.beat_unit)
 
-    grid = _build_grid(beats, config)
+    grid = _build_grid(beats, config, t_lo, t_hi)
     if grid:
         for hit in transcription.drum_hits:
             hit.time = _snap(hit.time, grid)
@@ -70,6 +78,13 @@ def _detect_madmom(audio_path: Path, config: QuantizeConfig) -> tuple[float | No
         # only relabeling the reported value afterwards.
         dbn_kwargs["min_bpm"] = config.fixed_tempo * 0.97
         dbn_kwargs["max_bpm"] = config.fixed_tempo * 1.03
+    else:
+        # madmom's default 55-215 BPM window octave-errors on fast material;
+        # let callers widen/narrow the search (e.g. a metal preset).
+        if config.min_bpm:
+            dbn_kwargs["min_bpm"] = config.min_bpm
+        if config.max_bpm:
+            dbn_kwargs["max_bpm"] = config.max_bpm
     proc = DBNDownBeatTrackingProcessor(**dbn_kwargs)
     result = proc(act)  # rows of [time, beat_number]
     beats = [float(t) for t, _ in result]
@@ -92,6 +107,9 @@ def _detect_librosa(audio_path: Path, config: QuantizeConfig) -> tuple[float | N
     if config.fixed_tempo:
         # bpm= fixes the tempo used for the beat-tracking DP (not just a prior).
         bt_kwargs["bpm"] = float(config.fixed_tempo)
+    elif config.min_bpm and config.max_bpm:
+        # librosa has no hard min/max; steer its prior toward the range midpoint.
+        bt_kwargs["start_bpm"] = (config.min_bpm + config.max_bpm) / 2.0
     tempo, beat_frames = librosa.beat.beat_track(**bt_kwargs)
     beats = [float(t) for t in librosa.frames_to_time(beat_frames, sr=sr)]
     # librosa >=0.10 returns tempo as a NumPy array; extract a scalar safely.
@@ -99,8 +117,53 @@ def _detect_librosa(audio_path: Path, config: QuantizeConfig) -> tuple[float | N
     tempo_scalar = float(tempo_arr.flat[0]) if tempo_arr.size and tempo_arr.flat[0] > 0 else None
     tempo_val = config.fixed_tempo or tempo_scalar or _tempo_from_beats(beats)
     # librosa gives beats but not downbeats; assume bar starts every N beats.
+    # That bar PHASE is a guess — madmom gives real downbeats.
     downbeats = beats[:: config.beats_per_bar] if beats else []
+    log.info(
+        "librosa backend: downbeats assumed every %d beats from the first beat "
+        "(bar phase is a guess; install madmom for bar-accurate downbeats).",
+        config.beats_per_bar,
+    )
     return tempo_val, beats, downbeats
+
+
+def _constant_beats(
+    tempo: float | None,
+    beats: list[float],
+    downbeats: list[float],
+    config: QuantizeConfig,
+    t_lo: float | None,
+    t_hi: float | None,
+) -> tuple[float | None, list[float], list[float]]:
+    """Replace tracked beats with a uniform grid at a constant tempo.
+
+    note-seq-style quantization: one steps-per-second rate anchored at the first
+    detected downbeat. For steady-tempo songs this is more robust than the
+    tracked grid, where a single missed beat halves the local resolution.
+    Falls back to the tracked beats when no tempo is available.
+    """
+    tempo_c = config.fixed_tempo or tempo
+    if not tempo_c or tempo_c <= 0:
+        log.warning("grid_mode='constant' needs a tempo (fixed or detected); using tracked beats.")
+        return tempo, beats, downbeats
+
+    import math
+
+    period = 60.0 / tempo_c
+    bpb = config.beats_per_bar
+    anchor = downbeats[0] if downbeats else (beats[0] if beats else 0.0)
+    lo = t_lo if t_lo is not None else anchor
+    hi = t_hi if t_hi is not None else anchor + bpb * period
+
+    # Extend backwards in WHOLE BARS so the anchor stays a downbeat.
+    n_back = max(0, math.ceil((anchor - lo) / period)) if lo < anchor else 0
+    n_back += (-n_back) % bpb
+    start = anchor - n_back * period
+    count = min(int((hi - start) / period) + 2, 100_000)
+    beats_c = [start + i * period for i in range(count)]
+    downbeats_c = beats_c[::bpb]
+    log.info("Constant grid: %.1f BPM anchored at %.3fs (%d beats)", tempo_c, anchor, count)
+    return tempo_c, beats_c, downbeats_c
 
 
 def _dedupe_hits(hits: list) -> list:
@@ -129,16 +192,57 @@ def _tempo_from_beats(beats: list[float]) -> float | None:
     return 60.0 / statistics.median(intervals)
 
 
-def _build_grid(beats: list[float], config: QuantizeConfig) -> list[float]:
-    """Subdivide each beat interval into ``grid / beat_unit`` slots."""
+def _build_grid(
+    beats: list[float],
+    config: QuantizeConfig,
+    t_lo: float | None = None,
+    t_hi: float | None = None,
+) -> list[float]:
+    """Subdivide each beat interval into ``grid / beat_unit`` slots.
+
+    Two robustness measures over the naive version:
+    - An interval much longer than the median beat (a missed beat) is treated as
+      multiple beats and subdivided accordingly, so one tracking dropout doesn't
+      halve the local grid resolution.
+    - The grid is extrapolated (at the median beat period) to cover ``t_lo`` /
+      ``t_hi``, so onsets before the first or after the last detected beat snap
+      to a real slot instead of being clamped onto the endpoint.
+    """
     if len(beats) < 2:
         return []
+    import statistics
+
     subdivisions = max(1, config.grid // config.beat_unit)
-    grid: list[float] = []
+    intervals = [b - a for a, b in zip(beats, beats[1:]) if b > a]
+    if not intervals:
+        return []
+    median_iv = statistics.median(intervals)
+
+    # Split oversized intervals into the number of beats they most likely span.
+    expanded = [beats[0]]
     for a, b in zip(beats, beats[1:]):
+        gap = b - a
+        if gap <= 0:
+            continue
+        k = max(1, round(gap / median_iv)) if gap > 1.6 * median_iv else 1
+        step_b = gap / k
+        expanded.extend(a + i * step_b for i in range(1, k + 1))
+
+    # Extrapolate to cover the onset range (bounded so a stray time can't explode it).
+    guard = 0
+    while t_lo is not None and expanded[0] > t_lo + 1e-9 and guard < 512:
+        expanded.insert(0, expanded[0] - median_iv)
+        guard += 1
+    guard = 0
+    while t_hi is not None and expanded[-1] < t_hi - 1e-9 and guard < 512:
+        expanded.append(expanded[-1] + median_iv)
+        guard += 1
+
+    grid: list[float] = []
+    for a, b in zip(expanded, expanded[1:]):
         step = (b - a) / subdivisions
         grid.extend(a + i * step for i in range(subdivisions))
-    grid.append(beats[-1])
+    grid.append(expanded[-1])
     return grid
 
 
@@ -179,13 +283,20 @@ def _annotate_bar_beat(transcription: Transcription, bar_starts: list[float], co
         default_span = 2.0
 
     # Prepend synthetic bar starts so any pickup hits before the first downbeat
-    # land in a real earlier bar with a non-negative beat (capped so a wildly
-    # early stray onset can't explode the bar count).
+    # land in a real earlier bar with a non-negative beat, and append synthetic
+    # bars past the last downbeat so an outro doesn't pile every hit onto the
+    # final detected bar's end (both capped so a stray onset can't explode the
+    # bar count).
     starts = list(bar_starts)
     earliest = min((h.time for h in transcription.drum_hits), default=starts[0])
     guard = 0
     while earliest < starts[0] - 1e-9 and guard < 64:
         starts.insert(0, starts[0] - default_span)
+        guard += 1
+    latest = max((h.time for h in transcription.drum_hits), default=starts[-1])
+    guard = 0
+    while latest > starts[-1] + default_span - 1e-9 and guard < 256:
+        starts.append(starts[-1] + default_span)
         guard += 1
 
     bpb = config.beats_per_bar

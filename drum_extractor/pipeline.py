@@ -180,7 +180,11 @@ def _do_ensemble(result: PipelineResult, config: PipelineConfig, audio_path: Pat
     from .ensemble import ensemble_drums
 
     result.stems.drums = ensemble_drums(
-        audio_path, result.stems.drums, song_dir / "stems", config.separation.ensemble_drums_model
+        audio_path,
+        result.stems.drums,
+        song_dir / "stems",
+        config.separation.ensemble_drums_model,
+        algorithm=config.separation.ensemble_algorithm,
     )
 
 

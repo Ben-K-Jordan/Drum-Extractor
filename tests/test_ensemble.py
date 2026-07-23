@@ -28,13 +28,18 @@ def test_average_of_two_signals(tmp_path):
     assert 0.5 < abs(y[0]) <= 0.98
 
 
-def test_average_aligns_to_shortest(tmp_path):
+def test_average_pads_to_longest(tmp_path):
+    # UVR-style: the shorter stem is zero-padded, preserving the longer's tail
+    # (previously we truncated to the shortest and silently discarded it).
     sr = 22050
-    sf.write(str(tmp_path / "long.wav"), np.zeros((sr, 1), dtype="float32"), sr)
+    long = np.zeros((sr, 1), dtype="float32")
+    long[-100:] = 0.5  # audible tail only the longer stem has
+    sf.write(str(tmp_path / "long.wav"), long, sr)
     sf.write(str(tmp_path / "short.wav"), np.zeros((sr // 2, 1), dtype="float32"), sr)
     out = average_stems([tmp_path / "long.wav", tmp_path / "short.wav"], tmp_path / "avg.wav")
     y, _ = sf.read(str(out))
-    assert len(y) == sr // 2  # trimmed to the shorter input
+    assert len(y) == sr  # padded to the longer input
+    assert abs(y[-50]) > 0.1  # the tail survived (halved by averaging, not dropped)
 
 
 def test_average_empty_raises(tmp_path):

@@ -66,9 +66,11 @@ def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote], min_frequ
     up). We compare basic-pitch's pitch to the median CREPE fundamental over the
     note; if CREPE is confidently ~12 semitones lower, we pull the note down.
 
-    ``fmin`` must not go below torchcrepe's lowest model bin (~31.8 Hz): a lower
-    fmin pins the Viterbi decode to bin 0 and collapses the whole F0 track to a
-    constant, so we clamp to at least C1 (32.7 Hz).
+    ``fmin`` must not go below torchcrepe's lowest model bin (~31.8 Hz):
+    empirically an out-of-range fmin degrades the decode badly (the track can
+    collapse toward the lowest bin), so we clamp to at least C1 (32.7 Hz). Note
+    this also bounds 5-string low-B (30.9 Hz) detection — CREPE simply cannot
+    see below its bottom bin.
     """
     try:
         import numpy as np  # type: ignore
@@ -117,30 +119,55 @@ def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote], min_frequ
 
 
 def assign_tab(notes: list[BassNote], config: BassTranscriptionConfig) -> None:
-    """Assign a (string, fret) to each note, minimising hand movement.
+    """Assign a (string, fret) to each note, minimising total hand movement.
 
-    Greedy: for each note pick the playable string/fret closest to the previous
-    note's fret. For 4 strings and mostly single notes this yields clean,
-    playable tab — the tab mapping is the easy part; note accuracy is the limit.
+    Viterbi/DP over the candidate strings per note (globally optimal for the
+    movement cost, unlike a greedy pass which can paint itself into a corner).
+    Costs: fret distance to the previous note's fret, a small bias against open
+    strings mid-phrase, and — after a rest long enough to reposition the hand —
+    free movement with a gentle pull back toward the starting position.
+    Notes outside the fretboard keep ``string``/``fret`` as ``None``.
     """
+    from math import inf
+
     tuning = config.tuning
-    prev_fret = 5  # start hand around the 5th fret
-    unreachable = 0
+    START_FRET = 5  # neutral starting hand position
+    OPEN_BIAS = 0.5  # slight bias against open strings mid-phrase
+    REST_RESET_S = 1.5  # a rest this long lets the hand move for free
+    RESET_ANCHOR = 0.2  # gentle pull toward START_FRET after such a rest
+
+    candidates: list[list[tuple[int, int]]] = []
     for n in notes:
-        best: tuple[int, int] | None = None
-        best_cost = 1e9
-        for s, open_pitch in enumerate(tuning):
-            fret = n.pitch - open_pitch
-            if 0 <= fret <= config.frets:
-                cost = abs(fret - prev_fret) + (0.5 if fret == 0 else 0.0)  # slight bias against open strings mid-phrase
-                if cost < best_cost:
-                    best_cost = cost
-                    best = (s, fret)
-        if best is not None:
-            n.string, n.fret = best
-            prev_fret = best[1]
-        else:
-            unreachable += 1
+        candidates.append(
+            [(s, n.pitch - open_pitch) for s, open_pitch in enumerate(tuning) if 0 <= n.pitch - open_pitch <= config.frets]
+        )
+    playable = [i for i, c in enumerate(candidates) if c]
+    unreachable = len(notes) - len(playable)
+
+    if playable:
+        first = playable[0]
+        costs = [0.5 * abs(f - START_FRET) + (OPEN_BIAS if f == 0 else 0.0) for _, f in candidates[first]]
+        back: list[list[int]] = [[-1] * len(candidates[first])]
+        for prev_i, cur_i in zip(playable, playable[1:]):
+            gap = notes[cur_i].start - notes[prev_i].end
+            new_costs, new_back = [], []
+            for _s2, f2 in candidates[cur_i]:
+                best_c, best_j = inf, 0
+                for j, (_s1, f1) in enumerate(candidates[prev_i]):
+                    move = RESET_ANCHOR * abs(f2 - START_FRET) if gap > REST_RESET_S else abs(f2 - f1)
+                    c = costs[j] + move + (OPEN_BIAS if f2 == 0 else 0.0)
+                    if c < best_c:
+                        best_c, best_j = c, j
+                new_costs.append(best_c)
+                new_back.append(best_j)
+            costs, back = new_costs, back + [new_back]
+        # Backtrack the optimal path.
+        j = min(range(len(costs)), key=costs.__getitem__)
+        for k in range(len(playable) - 1, -1, -1):
+            i = playable[k]
+            notes[i].string, notes[i].fret = candidates[i][j]
+            j = back[k][j]
+
     if unreachable:
         log.warning(
             "%d bass note(s) fall outside the fretboard range (%s); they are marked 'x' in the tab "

@@ -55,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--crepe", action="store_true", help="Octave-correct bass with torchcrepe")
     run.add_argument("--boost-double-kick", action="store_true", help="Recover fast double-kick (metal)")
     run.add_argument("--ensemble-model", default=None, help="audio-separator drum model to blend with Demucs")
+    run.add_argument(
+        "--ensemble-algorithm", default="avg_wave", choices=["avg_wave", "avg_fft", "min_fft"],
+        help="How the two drum stems are blended (fft modes are UVR-style spectrogram blending)",
+    )
+    run.add_argument("--segment", type=int, default=None, help="Demucs split-segment seconds (lower = less GPU memory)")
     run.add_argument("--no-sonify", action="store_true", help="Skip the by-ear correction audio + onset CSV")
 
     # separate — Stage 1 only
@@ -64,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     sep.add_argument("--model", default="htdemucs_ft")
     sep.add_argument("--device", default="auto")
     sep.add_argument("--shifts", type=int, default=1)
+    sep.add_argument("--segment", type=int, default=None, help="Demucs split-segment seconds (lower = less GPU memory)")
     sep.add_argument("--stems", default="drums,bass", help="Comma-separated stems to keep (default: drums,bass)")
 
     # transcribe-drums — Stage 2a
@@ -93,7 +99,12 @@ def _cmd_run(args) -> int:
     config = PipelineConfig(
         output_dir=Path(args.output),
         separation=SeparationConfig(
-            model=args.model, device=args.device, shifts=args.shifts, ensemble_drums_model=args.ensemble_model
+            model=args.model,
+            device=args.device,
+            shifts=args.shifts,
+            segment=args.segment,
+            ensemble_drums_model=args.ensemble_model,
+            ensemble_algorithm=args.ensemble_algorithm,
         ),
         drums=DrumTranscriptionConfig(backend=args.drum_backend, boost_double_kick=args.boost_double_kick),
         bass=BassTranscriptionConfig(refine_with_crepe=args.crepe),
@@ -114,7 +125,11 @@ def _cmd_separate(args) -> int:
     from .separation import separate
 
     config = SeparationConfig(
-        model=args.model, device=args.device, shifts=args.shifts, stems=tuple(s.strip() for s in args.stems.split(","))
+        model=args.model,
+        device=args.device,
+        shifts=args.shifts,
+        segment=args.segment,
+        stems=tuple(s.strip() for s in args.stems.split(",")),
     )
     out_dir = Path(args.output) / Path(args.audio).stem / "stems"
     stems = separate(args.audio, out_dir, config)

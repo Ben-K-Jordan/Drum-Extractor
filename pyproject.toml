@@ -9,7 +9,7 @@ description = "Isolate drums & bass from a song and transcribe drums to sheet mu
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Drum-Extractor" }]
+authors = [{ name = "Ben-K-Jordan", email = "benj9swim@gmail.com" }]
 keywords = ["music", "source-separation", "demucs", "drum-transcription", "sheet-music", "metal"]
 
 # Core deps are light: the pipeline data model + MIDI I/O. Heavy, stage-specific
@@ -62,10 +62,16 @@ dev = ["pytest>=7.0"]
 drum-extractor = "drum_extractor.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ben-k-jordan/drum-extractor"
+Homepage = "https://github.com/Ben-K-Jordan/Drum-Extractor"
+Repository = "https://github.com/Ben-K-Jordan/Drum-Extractor"
+Issues = "https://github.com/Ben-K-Jordan/Drum-Extractor/issues"
 
 [tool.setuptools.packages.find]
 include = ["drum_extractor*"]
+
+[tool.setuptools.package-data]
+# The package is fully typed; py.typed advertises that to type checkers (PEP 561).
+drum_extractor = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

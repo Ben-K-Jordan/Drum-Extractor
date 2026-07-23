@@ -91,14 +91,15 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
     voices: dict[int, "stream.Voice"] = {1: stream.Voice(id=1), 2: stream.Voice(id=2)}
 
     # A drum note lasts until the next onset in its own voice (standard drum
-    # notation), so straight 8ths read as 8ths rather than 16th-plus-rest. We
-    # quantize that gap to the grid, cap it at one bar, and — critically — never
-    # let it cross a barline. music21's makeMeasures does NOT split an
-    # over-long note into tied notes; it packs the overflow into the same
-    # measure, producing an overfull/malformed bar. Capping at the remaining
-    # space in the bar keeps every measure well-formed (the gap is filled by
-    # rests), which is correct for onset-based drum notation.
+    # notation), so straight 8ths read as 8ths rather than 16th-plus-rest — but
+    # capped at ONE BEAT: drums are attacks, and a kick two beats before the
+    # next one should engrave as a quarter note + rests, not a half note. Also
+    # capped at the space remaining in the bar: music21's makeMeasures does NOT
+    # split an over-long note into tied notes; it packs the overflow into the
+    # same measure, producing an overfull/malformed bar. The last onset in a
+    # voice defaults to a one-beat length rather than a lone 1/grid sliver.
     bar_ql = beats_per_bar * (4.0 / beat_unit)
+    ql_per_beat = 4.0 / beat_unit
     offsets_by_voice: dict[int, list[float]] = defaultdict(list)
     for (voice_id, off) in groups:
         offsets_by_voice[voice_id].append(off)
@@ -106,8 +107,8 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
     for vid, offs in offsets_by_voice.items():
         offs.sort()
         for i, off in enumerate(offs):
-            gap = (offs[i + 1] - off) if i + 1 < len(offs) else grid_ql
-            dur = min(bar_ql, max(grid_ql, round(gap / grid_ql) * grid_ql))
+            gap = (offs[i + 1] - off) if i + 1 < len(offs) else ql_per_beat
+            dur = min(ql_per_beat, max(grid_ql, round(gap / grid_ql) * grid_ql))
             pos_in_bar = off - (int(off // bar_ql) * bar_ql)
             remaining = bar_ql - pos_in_bar
             if remaining >= grid_ql - 1e-9:
@@ -150,9 +151,27 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
     try:
         score.makeMeasures(inPlace=True)
         score.makeRests(fillGaps=True, inPlace=True)
+        _renumber_voices(score)
     except Exception as exc:  # pragma: no cover - music21 can be picky on messy input
         log.warning("makeMeasures/makeRests warning: %s", exc)
     return score
+
+
+def _renumber_voices(score) -> None:
+    """Give measure voices the conventional 1-based MusicXML ids.
+
+    music21's makeMeasures re-creates Voice objects with 0-based ids, exporting
+    ``<voice>0</voice>``. MuseScore copes, but the drum-notation convention is
+    voice 1 = hands (stems up), voice 2 = feet (stems down) — recover that from
+    the stem directions we set on every note.
+    """
+    from music21 import stream  # type: ignore
+
+    for measure in score.recurse().getElementsByClass("Measure"):
+        for v in measure.getElementsByClass(stream.Voice):
+            notes = list(v.notes)
+            all_down = bool(notes) and all(getattr(n, "stemDirection", None) == "down" for n in notes)
+            v.id = "2" if all_down else "1"
 
 
 def transcription_to_musicxml(transcription: Transcription, out_path: str | Path, config: NotationConfig | None = None, quantize: QuantizeConfig | None = None) -> Path:

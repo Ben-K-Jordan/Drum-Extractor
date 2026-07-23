@@ -156,9 +156,12 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
     n_fft = 2048
     stft = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=512))
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    # Contiguous bands: the old mid (150-2000) / high (>=6000) split left a
+    # 2-6 kHz hole where snare crack and stick attack live, so that energy was
+    # invisible to the classifier.
     low = freqs < 150
-    mid = (freqs >= 150) & (freqs < 2000)
-    high = freqs >= 6000
+    mid = (freqs >= 150) & (freqs < 5000)
+    high = freqs >= 5000
 
     hits: list[DrumHit] = []
     vel = config.default_velocity
