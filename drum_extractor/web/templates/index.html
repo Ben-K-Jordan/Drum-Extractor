@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>🥁</text></svg>">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drum Extractor</title>
+<style>
+  :root { --bg:#14161a; --panel:#1b1f27; --edge:#2c313c; --text:#e6e9ef; --dim:#8b93a3; --accent:#e05545; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:#14161a; color:#e6e9ef; font:16px/1.5 system-ui,-apple-system,sans-serif;
+         min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2rem; padding:2rem; }
+  h1 { font-size:1.6rem; letter-spacing:.04em; }
+  h1 span { color:#e05545; }
+  .drop { width:min(560px,90vw); border:2px dashed #3a4150; border-radius:14px; background:#1b1f27;
+          padding:3.5rem 2rem; text-align:center; cursor:pointer; transition:border-color .15s, background .15s; }
+  .drop.hover { border-color:#e05545; background:#232937; }
+  .drop p { color:#8b93a3; margin-top:.6rem; font-size:.9rem; }
+  .drop strong { font-size:1.1rem; }
+  #file { display:none; }
+  #status { min-height:1.5rem; color:#8b93a3; }
+  #status.error { color:#ff7b6b; }
+  .hint { color:#5c6474; font-size:.85rem; max-width:560px; text-align:center; }
+</style>
+</head>
+<body>
+  <h1>DRUM<span>·</span>EXTRACTOR</h1>
+
+  <div class="drop" id="drop">
+    <strong>Drop a song or recording here</strong>
+    <p>or click to choose a file</p>
+    <p>{{ formats }}</p>
+  </div>
+  <input type="file" id="file" accept="audio/*">
+  <div id="status"></div>
+  <p class="hint">Separation runs locally (Demucs). A full song takes roughly its own
+     length on CPU, much less with a GPU — you'll land on the mixer as soon as the stems are ready.</p>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const status = document.getElementById('status');
+
+drop.addEventListener('click', () => fileInput.click());
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hover'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('hover'); }));
+drop.addEventListener('drop', e => { if (e.dataTransfer.files.length) send(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', () => { if (fileInput.files.length) send(fileInput.files[0]); });
+
+async function send(file) {
+  status.classList.remove('error');
+  status.textContent = `Uploading ${file.name}…`;
+  const form = new FormData();
+  form.append('song', file);
+  try {
+    const res = await fetch('/upload', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    window.location = data.mixer;
+  } catch (err) {
+    status.classList.add('error');
+    status.textContent = `Upload failed: ${err.message}`;
+  }
+}
+</script>
+</body>
+</html>

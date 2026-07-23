@@ -56,18 +56,34 @@ class PipelineResult:
         return "\n".join(lines)
 
 
-def run_pipeline(audio_path: str | Path, config: PipelineConfig | None = None) -> PipelineResult:
-    """Run the configured stages on ``audio_path`` and return a result bundle."""
+def run_pipeline(
+    audio_path: str | Path,
+    config: PipelineConfig | None = None,
+    on_stage=None,
+) -> PipelineResult:
+    """Run the configured stages on ``audio_path`` and return a result bundle.
+
+    ``on_stage`` (optional) is called with a short stage name as each stage
+    begins — used by UIs to show progress. Exceptions it raises are swallowed.
+    """
     config = config or PipelineConfig()
     audio_path = Path(audio_path)
     song_dir = config.output_dir / audio_path.stem
     song_dir.mkdir(parents=True, exist_ok=True)
     result = PipelineResult()
 
+    def notify(stage: str) -> None:
+        if on_stage:
+            try:
+                on_stage(stage)
+            except Exception:  # a UI callback must never break the pipeline
+                pass
+
     # --- Stage 1: separation (the reliable core) ---
     if config.do_separation:
         from .separation import separate
 
+        notify("separating")
         result.stems = separate(audio_path, song_dir / "stems", config.separation)
     else:
         # Allow re-running later stages on pre-existing stems.
@@ -79,18 +95,21 @@ def run_pipeline(audio_path: str | Path, config: PipelineConfig | None = None) -
 
     # --- Stage 2a: drum transcription ---
     if config.do_drum_transcription and result.stems.drums:
+        notify("transcribing drums")
         _try(result, "drum transcription", lambda: _do_drums(result, config, song_dir))
     elif config.do_drum_transcription:
         result.warnings.append("drum transcription: no drum stem available")
 
     # --- Stage 2b: bass transcription ---
     if config.do_bass_transcription and result.stems.bass:
+        notify("transcribing bass")
         _try(result, "bass transcription", lambda: _do_bass(result, config, song_dir))
     elif config.do_bass_transcription:
         result.warnings.append("bass transcription: no bass stem available")
 
     # --- Stage 3: quantization (needs drum hits + an audio reference) ---
     if config.do_quantize and result.transcription.drum_hits:
+        notify("quantizing")
         ref = result.stems.drums or audio_path
         _try(result, "quantization", lambda: _do_quantize(result, config, ref))
 
@@ -102,10 +121,12 @@ def run_pipeline(audio_path: str | Path, config: PipelineConfig | None = None) -
 
     # --- Stage 4: notation ---
     if config.do_notation and result.transcription.drum_hits:
+        notify("engraving sheet music")
         _try(result, "notation", lambda: _do_notation(result, config, song_dir))
 
     # --- Phase 4: correction aids (sonification + onset CSV) ---
     if config.do_sonify and result.transcription.drum_hits:
+        notify("rendering correction aids")
         _try(result, "sonification", lambda: _do_sonify(result, song_dir))
 
     log.info("\n%s", result.summary())

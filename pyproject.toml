@@ -45,6 +45,9 @@ notation = ["music21>=9.1.0"]
 # aids need no extra install (they use scipy/librosa/soundfile from above).
 ensemble = ["audio-separator>=0.17"]
 
+# Local web UI: drop page -> stem mixer -> downloads (`drum-extractor web`).
+web = ["flask>=3.0"]
+
 # The default drum backend. There is NO `pip install adtof` that ships a CLI —
 # ADTOF-pytorch provides the `adtof` command. Installed from git, so kept out of
 # `all` to keep `pip install .[all]` fully resolvable from PyPI. Adjust the spec
@@ -54,7 +57,7 @@ adtof = ["adtof @ git+https://github.com/xavriley/ADTOF-pytorch"]
 # Composed from the per-stage extras so it can't drift (this now correctly
 # includes madmom + audio-separator, which the old hand-listed `all` omitted).
 # ADTOF is intentionally excluded (git-only); install it separately if wanted.
-all = ["drum-extractor[separation,drums,bass,bass-crepe,quantize,notation,ensemble]"]
+all = ["drum-extractor[separation,drums,bass,bass-crepe,quantize,notation,ensemble,web]"]
 
 dev = ["pytest>=7.0"]
 
@@ -70,8 +73,8 @@ Issues = "https://github.com/Ben-K-Jordan/Drum-Extractor/issues"
 include = ["drum_extractor*"]
 
 [tool.setuptools.package-data]
-# The package is fully typed; py.typed advertises that to type checkers (PEP 561).
-drum_extractor = ["py.typed"]
+# py.typed advertises inline types (PEP 561); templates ship the web UI pages.
+drum_extractor = ["py.typed", "web/templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -84,6 +84,24 @@ Three tools install separately because they're heavier or app-based:
 
 ## Usage
 
+### Web UI (the easy way)
+
+```bash
+pip install -e ".[web,separation]"    # + notation/bass extras for the downloads
+drum-extractor web                    # -> http://127.0.0.1:8237
+```
+
+Drop a song or recording on the page; when separation finishes you land on a
+**mixer board**: one fader per stem (drums, bass, vocals, guitars+), with
+mute/solo per channel and a master fader. From there:
+
+- **Download mix (your levels)** — rendered *in the browser* at exactly your
+  fader settings (Web Audio OfflineAudioContext → WAV), no re-processing.
+- **Download the drum sheet** (PDF when MuseScore is installed, else MusicXML),
+  the **drum MIDI**, and the **bass tab**.
+
+The server binds to localhost only by default and runs everything locally.
+
 ### Command line
 
 ```bash

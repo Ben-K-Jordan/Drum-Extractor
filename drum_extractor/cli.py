@@ -84,6 +84,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(tb)
     tb.add_argument("--crepe", action="store_true", help="Octave-correct with torchcrepe")
 
+    # web — local UI: drop a song, mix stems, download results
+    web = sub.add_parser("web", help="Launch the local web UI (drop page -> stem mixer -> downloads)")
+    _add_common(web)
+    web.add_argument("--host", default="127.0.0.1", help="Bind address (default: localhost only)")
+    web.add_argument("--port", type=int, default=8237)
+    web.add_argument("--model", default="htdemucs_ft", help="Demucs model for uploads")
+    web.add_argument("--device", default="auto")
+
     # bank-build / bank-eval — ground-truth accuracy bank
     bb = sub.add_parser("bank-build", help="Build the ground-truth groove bank (synthesized audio + known hits)")
     _add_common(bb)
@@ -183,6 +191,16 @@ def _cmd_transcribe_bass(args) -> int:
     return 0
 
 
+def _cmd_web(args) -> int:
+    from .web.server import create_app, default_config_factory
+
+    out = Path(args.output)
+    app = create_app(default_config_factory(out, model=args.model, device=args.device), output_dir=out)
+    print(f"Drum Extractor UI -> http://{args.host}:{args.port}   (Ctrl+C to stop)")
+    app.run(host=args.host, port=args.port, threaded=True)
+    return 0
+
+
 def _cmd_bank_build(args) -> int:
     from .bank import build_bank
 
@@ -248,6 +266,7 @@ _COMMANDS = {
     "separate": _cmd_separate,
     "transcribe-drums": _cmd_transcribe_drums,
     "transcribe-bass": _cmd_transcribe_bass,
+    "web": _cmd_web,
     "bank-build": _cmd_bank_build,
     "bank-eval": _cmd_bank_eval,
     "notate": _cmd_notate,

@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>🥁</text></svg>">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} — Drum Extractor</title>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:#14161a; color:#e6e9ef; font:15px/1.5 system-ui,-apple-system,sans-serif;
+         min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:1.5rem; gap:1.2rem; }
+  header { width:min(760px,95vw); display:flex; justify-content:space-between; align-items:baseline; }
+  header h1 { font-size:1.1rem; letter-spacing:.03em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%; }
+  header a { color:#8b93a3; text-decoration:none; font-size:.85rem; }
+  header a:hover { color:#e6e9ef; }
+
+  /* processing state */
+  #processing { display:flex; flex-direction:column; align-items:center; gap:1rem; margin-top:4rem; }
+  .spinner { width:44px; height:44px; border:4px solid #2c313c; border-top-color:#e05545; border-radius:50%;
+             animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #stage { color:#8b93a3; }
+  #procerror { color:#ff7b6b; max-width:520px; text-align:center; white-space:pre-wrap; }
+
+  /* console */
+  #console { display:none; flex-direction:column; gap:1.2rem; width:min(760px,95vw); }
+  .board { background:linear-gradient(#20242e,#191d25); border:1px solid #2c313c; border-radius:12px;
+           padding:1.2rem; display:flex; justify-content:center; gap:1rem; flex-wrap:wrap; }
+  .strip { width:108px; background:#161a21; border:1px solid #2c313c; border-radius:9px;
+           padding: .8rem .5rem; display:flex; flex-direction:column; align-items:center; gap:.55rem; }
+  .strip .name { font-size:.78rem; letter-spacing:.12em; color:#aeb6c4; text-transform:uppercase; }
+  .strip .master-name { color:#e05545; }
+  .fader { height:150px; display:flex; align-items:center; justify-content:center; }
+  .fader input { writing-mode: vertical-rl; direction: rtl; width:28px; height:150px; accent-color:#e05545; }
+  .db { font-variant-numeric:tabular-nums; font-size:.75rem; color:#8b93a3; min-height:1.1em; }
+  .btns { display:flex; gap:.4rem; }
+  .btns button { border:1px solid #3a4150; background:#20242e; color:#aeb6c4; font-size:.72rem;
+                 padding:.22rem .5rem; border-radius:5px; cursor:pointer; }
+  .btns button.on-mute { background:#8a2f24; border-color:#a63a2c; color:#fff; }
+  .btns button.on-solo { background:#8f7a1e; border-color:#ab9326; color:#fff; }
+
+  .transport { display:flex; align-items:center; gap:.9rem; background:#191d25; border:1px solid #2c313c;
+               border-radius:10px; padding:.8rem 1rem; }
+  .transport button { border:1px solid #3a4150; background:#20242e; color:#e6e9ef; font-size:1rem;
+                      width:44px; height:38px; border-radius:7px; cursor:pointer; }
+  #seek { flex:1; accent-color:#e05545; }
+  #clock { font-variant-numeric:tabular-nums; color:#8b93a3; font-size:.85rem; min-width:6.5rem; text-align:right; }
+
+  .downloads { display:flex; gap:.7rem; flex-wrap:wrap; }
+  .downloads a, .downloads button {
+      border:1px solid #3a4150; background:#20242e; color:#e6e9ef; text-decoration:none; font-size:.86rem;
+      padding:.55rem .9rem; border-radius:8px; cursor:pointer; display:inline-flex; gap:.45rem; align-items:center; }
+  .downloads a:hover, .downloads button:hover { border-color:#e05545; }
+  .downloads .primary { background:#e05545; border-color:#e05545; color:#fff; }
+  #warnings { color:#8f7a1e; font-size:.8rem; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>{{ title }}</h1>
+    <a href="/">&larr; new song</a>
+  </header>
+
+  <div id="processing">
+    <div class="spinner"></div>
+    <div id="stage">starting…</div>
+    <div id="procerror"></div>
+  </div>
+
+  <div id="console">
+    <div class="board" id="board"></div>
+
+    <div class="transport">
+      <button id="play" title="play/pause">&#9654;</button>
+      <button id="stop" title="back to start">&#9632;</button>
+      <input type="range" id="seek" min="0" max="1000" value="0">
+      <span id="clock">0:00 / 0:00</span>
+    </div>
+
+    <div class="downloads" id="downloads">
+      <button class="primary" id="dlmix">&#8681; Download mix (your levels)</button>
+    </div>
+    <div id="warnings"></div>
+  </div>
+
+<script>
+const JOB = {{ job_id | tojson }};
+const NICE = { drums:'Drums', bass:'Bass', other:'Guitars+', vocals:'Vocals' };
+
+const state = {
+  ctx: null, master: null,
+  stems: [],            // {name, buffer, gainNode, fader:0..1, muted:false, solo:false}
+  duration: 0,
+  playing: false, sources: [], startedAt: 0, offset: 0,
+};
+
+// ---------- job polling ----------
+async function poll() {
+  const res = await fetch(`/job/${JOB}`);
+  if (!res.ok) { document.getElementById('stage').textContent = 'job not found'; return; }
+  const job = await res.json();
+  if (job.state === 'error') {
+    document.querySelector('.spinner').style.display = 'none';
+    document.getElementById('stage').textContent = 'failed';
+    document.getElementById('procerror').textContent = job.error || 'unknown error';
+    return;
+  }
+  if (job.state !== 'done') {
+    document.getElementById('stage').textContent = job.state + '…';
+    setTimeout(poll, 1500);
+    return;
+  }
+  await loadStems(job);
+}
+poll();
+
+// ---------- stem loading ----------
+async function loadStems(job) {
+  document.getElementById('stage').textContent = 'loading stems into the mixer…';
+  state.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  state.master = state.ctx.createGain();
+  state.master.connect(state.ctx.destination);
+
+  const names = Object.keys(job.stems);
+  for (const name of names) {
+    const buf = await fetch(job.stems[name]).then(r => r.arrayBuffer());
+    const audio = await state.ctx.decodeAudioData(buf);
+    const g = state.ctx.createGain();
+    g.connect(state.master);
+    state.stems.push({ name, buffer: audio, gainNode: g, fader: 1.0, muted: false, solo: false });
+    state.duration = Math.max(state.duration, audio.duration);
+  }
+  buildBoard(job);
+  document.getElementById('processing').style.display = 'none';
+  document.getElementById('console').style.display = 'flex';
+  updateClock();
+}
+
+// ---------- UI ----------
+function strip(labelHtml, faderCb, extraBtns) {
+  const el = document.createElement('div');
+  el.className = 'strip';
+  el.innerHTML = `<div class="name">${labelHtml}</div>
+    <div class="fader"><input type="range" min="0" max="1.5" step="0.01" value="1"></div>
+    <div class="db">0.0 dB</div><div class="btns"></div>`;
+  const input = el.querySelector('input');
+  const db = el.querySelector('.db');
+  input.addEventListener('input', () => {
+    const v = parseFloat(input.value);
+    db.textContent = v === 0 ? '-inf dB' : `${(20 * Math.log10(v)).toFixed(1)} dB`;
+    faderCb(v);
+  });
+  if (extraBtns) el.querySelector('.btns').append(...extraBtns);
+  return el;
+}
+
+function buildBoard(job) {
+  const board = document.getElementById('board');
+  for (const s of state.stems) {
+    const mute = document.createElement('button');
+    mute.textContent = 'M';
+    mute.onclick = () => { s.muted = !s.muted; mute.classList.toggle('on-mute', s.muted); applyGains(); };
+    const solo = document.createElement('button');
+    solo.textContent = 'S';
+    solo.onclick = () => { s.solo = !s.solo; solo.classList.toggle('on-solo', s.solo); applyGains(); };
+    board.appendChild(strip(NICE[s.name] || s.name, v => { s.fader = v; applyGains(); }, [mute, solo]));
+  }
+  const masterStrip = strip('<span class="master-name">Master</span>', v => { state.master.gain.value = v; });
+  board.appendChild(masterStrip);
+
+  const dls = document.getElementById('downloads');
+  for (const d of Object.values(job.downloads || {})) {
+    const a = document.createElement('a');
+    a.href = d.url;
+    a.innerHTML = `&#8681; ${d.label}`;
+    dls.appendChild(a);
+  }
+  if (job.warnings && job.warnings.length)
+    document.getElementById('warnings').textContent = 'Notes:\n' + job.warnings.join('\n');
+}
+
+function effectiveGain(s) {
+  const anySolo = state.stems.some(x => x.solo);
+  if (s.muted) return 0;
+  if (anySolo && !s.solo) return 0;
+  return s.fader;
+}
+function applyGains() {
+  for (const s of state.stems) s.gainNode.gain.value = effectiveGain(s);
+}
+
+// ---------- transport ----------
+function play() {
+  if (state.playing) { pause(); return; }
+  state.ctx.resume();
+  applyGains();
+  state.sources = state.stems.map(s => {
+    const src = state.ctx.createBufferSource();
+    src.buffer = s.buffer;
+    src.connect(s.gainNode);
+    src.start(0, Math.min(state.offset, s.buffer.duration));
+    return src;
+  });
+  state.startedAt = state.ctx.currentTime;
+  state.playing = true;
+  document.getElementById('play').innerHTML = '&#10073;&#10073;';
+  tick();
+}
+function pause() {
+  state.offset = Math.min(state.duration, state.offset + state.ctx.currentTime - state.startedAt);
+  stopSources();
+}
+function stopAll() { state.offset = 0; stopSources(); updateClock(); }
+function stopSources() {
+  state.sources.forEach(s => { try { s.stop(); } catch (e) {} });
+  state.sources = [];
+  state.playing = false;
+  document.getElementById('play').innerHTML = '&#9654;';
+}
+function currentTime() {
+  return state.playing
+    ? Math.min(state.duration, state.offset + state.ctx.currentTime - state.startedAt)
+    : state.offset;
+}
+function tick() {
+  if (!state.playing) return;
+  if (currentTime() >= state.duration) { stopAll(); return; }
+  updateClock();
+  requestAnimationFrame(tick);
+}
+function fmt(t) { return `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`; }
+function updateClock() {
+  document.getElementById('clock').textContent = `${fmt(currentTime())} / ${fmt(state.duration)}`;
+  if (!seekDragging) document.getElementById('seek').value = state.duration ? (1000 * currentTime() / state.duration) : 0;
+}
+
+let seekDragging = false;
+const seek = document.getElementById('seek');
+seek.addEventListener('pointerdown', () => { seekDragging = true; });
+seek.addEventListener('change', () => {
+  seekDragging = false;
+  const t = (seek.value / 1000) * state.duration;
+  const wasPlaying = state.playing;
+  if (state.playing) stopSources();
+  state.offset = t;
+  updateClock();
+  if (wasPlaying) play();
+});
+document.getElementById('play').onclick = play;
+document.getElementById('stop').onclick = stopAll;
+
+// ---------- download the adjusted mix (rendered in-browser) ----------
+document.getElementById('dlmix').onclick = async () => {
+  const btn = document.getElementById('dlmix');
+  btn.disabled = true;
+  btn.textContent = 'rendering…';
+  try {
+    const sr = 44100;
+    const off = new OfflineAudioContext(2, Math.ceil(state.duration * sr), sr);
+    const masterGain = state.master.gain.value;
+    for (const s of state.stems) {
+      const g = effectiveGain(s) * masterGain;
+      if (g <= 0) continue;
+      const src = off.createBufferSource();
+      src.buffer = s.buffer;
+      const gn = off.createGain();
+      gn.gain.value = g;
+      src.connect(gn).connect(off.destination);
+      src.start(0);
+    }
+    const rendered = await off.startRendering();
+    const blob = encodeWav(rendered);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `{{ title }}-custom-mix.wav`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#8681; Download mix (your levels)';
+  }
+};
+
+function encodeWav(buffer) {
+  const ch = buffer.numberOfChannels, len = buffer.length, sr = buffer.sampleRate;
+  const bytes = 44 + len * ch * 2;
+  const ab = new ArrayBuffer(bytes);
+  const v = new DataView(ab);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, bytes - 8, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, ch, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * ch * 2, true); v.setUint16(32, ch * 2, true);
+  v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, len * ch * 2, true);
+  let o = 44;
+  const chans = [];
+  for (let c = 0; c < ch; c++) chans.push(buffer.getChannelData(c));
+  for (let i = 0; i < len; i++)
+    for (let c = 0; c < ch; c++) {
+      const x = Math.max(-1, Math.min(1, chans[c][i]));
+      v.setInt16(o, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+      o += 2;
+    }
+  return new Blob([ab], { type: 'audio/wav' });
+}
+</script>
+</body>
+</html>
