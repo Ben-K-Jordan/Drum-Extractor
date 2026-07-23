@@ -70,13 +70,18 @@ web = ["flask>=3.0", "verovio>=4.0"]
 # to match the repo if its package name differs.
 adtof = ["adtof @ git+https://github.com/xavriley/ADTOF-pytorch"]
 
-# Composed from the per-stage extras so it can't drift. Two deliberate
+# Composed from the per-stage extras so it can't drift. Three deliberate
 # exclusions keep `pip install "drum-extractor[all]"` reliably installable:
 # - quantize/madmom: its 2018-era build breaks on modern Python/NumPy for many
 #   users, and quantization falls back to librosa automatically anyway.
 # - adtof: installed from git, not PyPI.
-# Opt into either with its own extra once the base install works.
-all = ["drum-extractor[separation,drums,bass,bass-crepe,notation,ensemble,web,gp]"]
+# - ensemble/audio-separator: its strict pins (samplerate==0.1.0, onnx-weekly,
+#   beartype<0.19) clash with the tensorflow/librosa stack and can send pip's
+#   resolver into hours of backtracking, ending in source builds that need gcc
+#   (this killed the Docker image build). The two-model drum blend is a niche
+#   upgrade; everything else works without it.
+# Opt into any of them with its own extra once the base install works.
+all = ["drum-extractor[separation,drums,bass,bass-crepe,notation,web,gp]"]
 
 dev = ["pytest>=7.0"]
 

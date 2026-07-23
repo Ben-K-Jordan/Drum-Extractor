@@ -86,7 +86,7 @@ command.
 | **ADTOF** | The best open drum transcriber (trained on rock/metal) — without it a rough built-in fallback is used | `pip install -e ".[adtof]"` |
 | **MuseScore 4** | PDF sheet export (MusicXML works without it) | [musescore.org](https://musescore.org), CLI on PATH |
 | **madmom** | Bar-accurate downbeat tracking (librosa fallback otherwise) | `pip install -e ".[quantize]"` — its old build chain can fail on modern Python, which is why it's not in `[all]` |
-| **audio-separator** | Blend a second drum model with Demucs (`--ensemble-model`) | `pip install -e ".[ensemble]"` |
+| **audio-separator** | Blend a second drum model with Demucs (`--ensemble-model`) | `pip install -e ".[ensemble]"` — its strict dependency pins can fight the rest of the stack, which is why it's not in `[all]` |
 
 **Docker, built locally** (instead of the prebuilt `ghcr.io` image):
 
