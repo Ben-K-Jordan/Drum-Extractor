@@ -45,3 +45,28 @@ jobs:
           print(f"aggregate F = {f:.3f} (floor {floor})")
           sys.exit(0 if f >= floor else 1)
           PY
+
+  docker:
+    name: Publish Docker image
+    # A prebuilt public image makes `docker run ghcr.io/...` a true one-liner
+    # (no clone, no Python). Published only from main, after tests pass.
+    needs: [tests, accuracy]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/ben-k-jordan/drum-extractor:latest
+            ghcr.io/ben-k-jordan/drum-extractor:${{ github.sha }}

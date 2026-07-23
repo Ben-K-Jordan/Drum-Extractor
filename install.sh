@@ -63,14 +63,43 @@ fi
   && echo "  madmom installed (bar-accurate downbeats)" \
   || warn "madmom skipped (its 2018-era build often fails on modern Python) — librosa fallback is used automatically"
 
+# --- pre-download model weights (full mode) ---------------------------------
+# ~300 MB once; doing it now means the FIRST song doesn't stall on a silent
+# download. Failure is fine — weights fetch automatically on first use.
+if [ "$MODE" = "full" ]; then
+  say "Pre-downloading the Demucs model (~300 MB, one time; safe to skip with Ctrl+C)"
+  "$VENV/bin/python" - <<'PY' || warn "model download skipped — it will happen automatically on the first song"
+from demucs.pretrained import get_model
+get_model("htdemucs_ft")
+print("model cached.")
+PY
+fi
+
+# --- double-clickable launchers ----------------------------------------------
+say "Creating launchers"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cat > run.sh <<EOF
+#!/usr/bin/env bash
+exec "$ROOT/$VENV/bin/drum-extractor" web "\$@"
+EOF
+chmod +x run.sh
+echo "  ./run.sh"
+if [ "$(uname -s)" = "Darwin" ]; then
+  cp run.sh "Drum Extractor.command"
+  chmod +x "Drum Extractor.command"
+  echo "  'Drum Extractor.command'  (double-click it in Finder)"
+fi
+
 # --- verify -----------------------------------------------------------------
 say "Checking the result"
 "$VENV/bin/drum-extractor" doctor || true
 
 cat <<EOF
 
-Done. Next steps:
-  $VENV/bin/drum-extractor web        # open the app at http://127.0.0.1:8237
+Done. Start the app with:
+  ./run.sh                            # browser opens automatically
+
+Also useful:
   $VENV/bin/drum-extractor doctor     # re-check the environment any time
 
 Optional (for PDF sheet export): install MuseScore 4 from https://musescore.org

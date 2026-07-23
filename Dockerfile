@@ -23,4 +23,4 @@ RUN pip install --no-cache-dir -e ".[all]" \
 EXPOSE 8237
 VOLUME ["/app/output"]
 
-CMD ["drum-extractor", "web", "--host", "0.0.0.0", "--port", "8237"]
+CMD ["drum-extractor", "web", "--host", "0.0.0.0", "--port", "8237", "--no-browser"]

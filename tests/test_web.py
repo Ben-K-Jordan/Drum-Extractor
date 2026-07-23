@@ -163,6 +163,9 @@ def test_pipeline_failure_reported(app, monkeypatch):
 def test_cli_web_flags_parse():
     from drum_extractor.cli import build_parser
 
-    args = build_parser().parse_args(["web", "--port", "9000", "--model", "htdemucs"])
+    args = build_parser().parse_args(["web", "--port", "9000", "--model", "htdemucs", "--no-browser"])
     assert args.command == "web"
     assert args.port == 9000
+    assert args.no_browser is True
+    # Default: the browser auto-opens (one-click UX).
+    assert build_parser().parse_args(["web"]).no_browser is False

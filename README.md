@@ -28,21 +28,35 @@ Everything runs **locally** — your audio never leaves your machine.
 
 ## Quick start
 
+**One line** (macOS / Linux) — installs to `~/drum-extractor`, pre-downloads
+the model, launches the app, and opens your browser:
+
 ```bash
-git clone https://github.com/Ben-K-Jordan/Drum-Extractor.git
-cd Drum-Extractor
-./install.sh          # creates .venv, installs everything, verifies itself
-.venv/bin/drum-extractor web
+curl -fsSL https://raw.githubusercontent.com/Ben-K-Jordan/Drum-Extractor/main/bootstrap.sh | bash
 ```
 
-Open **http://127.0.0.1:8237** and drop a song in. The first run downloads the
-Demucs model weights (~300 MB); separation takes roughly the length of the
-track on CPU, much less with a GPU.
+Relaunch any time with `~/drum-extractor/run.sh` (macOS users also get a
+double-clickable **Drum Extractor.command**).
 
-<details>
-<summary><strong>Manual install / other options</strong></summary>
+**Docker** — no clone, no Python:
 
 ```bash
+docker run -p 8237:8237 -v drumx-output:/app/output ghcr.io/ben-k-jordan/drum-extractor
+```
+
+**Windows** — clone the repo, double-click `install.bat`, then `run.bat`.
+
+Then drop a song in at **http://127.0.0.1:8237** (the browser opens by
+itself outside Docker). Separation takes roughly the length of the track on
+CPU, much less with a GPU.
+
+<details>
+<summary><strong>Manual install / picking your own pieces</strong></summary>
+
+```bash
+git clone https://github.com/Ben-K-Jordan/Drum-Extractor.git && cd Drum-Extractor
+./install.sh                   # scripted: venv + extras + launchers + checkup
+# or fully by hand:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[all]"        # separation + transcription + notation + web UI
 drum-extractor doctor          # shows what's ready and how to fix any gaps
@@ -62,7 +76,7 @@ command.
 | **madmom** | Bar-accurate downbeat tracking (librosa fallback otherwise) | `pip install -e ".[quantize]"` — its old build chain can fail on modern Python, which is why it's not in `[all]` |
 | **audio-separator** | Blend a second drum model with Demucs (`--ensemble-model`) | `pip install -e ".[ensemble]"` |
 
-**Docker**
+**Docker, built locally** (instead of the prebuilt `ghcr.io` image):
 
 ```bash
 docker build -t drum-extractor .

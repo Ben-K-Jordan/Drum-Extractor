@@ -94,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=8237)
     web.add_argument("--model", default="htdemucs_ft", help="Demucs model for uploads")
     web.add_argument("--device", default="auto")
+    web.add_argument("--no-browser", action="store_true", help="Don't auto-open the browser")
 
     # bank-build / bank-eval — ground-truth accuracy bank
     bb = sub.add_parser("bank-build", help="Build the ground-truth groove bank (synthesized audio + known hits)")
@@ -208,7 +209,15 @@ def _cmd_web(args) -> int:
 
     out = Path(args.output)
     app = create_app(default_config_factory(out, model=args.model, device=args.device), output_dir=out)
-    print(f"Drum Extractor UI -> http://{args.host}:{args.port}   (Ctrl+C to stop)")
+    # 0.0.0.0 binds all interfaces but isn't a browsable address itself.
+    display_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+    url = f"http://{display_host}:{args.port}"
+    print(f"Drum Extractor UI -> {url}   (Ctrl+C to stop)")
+    if not args.no_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     app.run(host=args.host, port=args.port, threaded=True)
     return 0
 
