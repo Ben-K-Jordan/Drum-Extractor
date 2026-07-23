@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+output
+bank
+__pycache__
+*.egg-info
+.pytest_cache
+docs
+tests
+examples
+.github

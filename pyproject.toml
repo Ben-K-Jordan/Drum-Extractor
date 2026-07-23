@@ -4,13 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "drum-extractor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Isolate drums & bass from a song and transcribe drums to sheet music (built for metal/punk/rock practice)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Ben-K-Jordan", email = "benj9swim@gmail.com" }]
 keywords = ["music", "source-separation", "demucs", "drum-transcription", "sheet-music", "metal"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
 
 # Core deps are light: the pipeline data model + MIDI I/O. Heavy, stage-specific
 # tools live in the optional extras below so you install only what you use.
@@ -56,10 +66,13 @@ web = ["flask>=3.0", "verovio>=4.0"]
 # to match the repo if its package name differs.
 adtof = ["adtof @ git+https://github.com/xavriley/ADTOF-pytorch"]
 
-# Composed from the per-stage extras so it can't drift (this now correctly
-# includes madmom + audio-separator, which the old hand-listed `all` omitted).
-# ADTOF is intentionally excluded (git-only); install it separately if wanted.
-all = ["drum-extractor[separation,drums,bass,bass-crepe,quantize,notation,ensemble,web]"]
+# Composed from the per-stage extras so it can't drift. Two deliberate
+# exclusions keep `pip install "drum-extractor[all]"` reliably installable:
+# - quantize/madmom: its 2018-era build breaks on modern Python/NumPy for many
+#   users, and quantization falls back to librosa automatically anyway.
+# - adtof: installed from git, not PyPI.
+# Opt into either with its own extra once the base install works.
+all = ["drum-extractor[separation,drums,bass,bass-crepe,notation,ensemble,web]"]
 
 dev = ["pytest>=7.0"]
 

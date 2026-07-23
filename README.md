@@ -1,350 +1,162 @@
-# Drum-Extractor
+# 🥁 Drum Extractor
 
-Give it a metal, punk, or rock song and it returns the **isolated drums and bass** —
-then transcribes the drums into **MIDI and drum sheet music** for practice. Built
-around mature open-source models, with every stage designed for the messy reality
-of loud, distorted, fast music.
+**Drop in a metal, punk, or rock song → get the isolated drums and bass, a
+mixer to practice with, and auto-generated drum sheet music.**
 
-> **Is this realistic?** Yes — with an honest split.
-> - **Isolating drums + bass is a solved problem.** Demucs v4 gives clean stems from a full mix. This works today.
-> - **Drum sheet music is workable-to-experimental.** A normal groove transcribes to a genuinely useful chart. Fast metal (blast beats, 200+ BPM double-bass) comes out as a *rough scaffold you correct by ear* — that's a limit of every current model, not this tool. Set expectations accordingly.
-> - **Bass transcription** is the easiest of the three (bass is mostly monophonic).
+[![CI](https://github.com/Ben-K-Jordan/Drum-Extractor/actions/workflows/ci.yml/badge.svg)](https://github.com/Ben-K-Jordan/Drum-Extractor/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
----
+Everything runs **locally** — your audio never leaves your machine.
 
-## The pipeline
+![The mixer](docs/images/mixer.png)
 
-```
-  full song (wav/mp3/flac)
-          │
-          ▼
-  ┌──────────────────────────┐
-  │ Stage 1  SEPARATION      │   Demucs v4 (htdemucs_ft)        [MIT]
-  │ full mix → drums + bass  │   → drums.wav, bass.wav
-  └──────────────────────────┘
-       │ drums.wav                 │ bass.wav
-       ▼                           ▼
-  ┌──────────────────┐    ┌──────────────────────┐
-  │ Stage 2a  DRUMS  │    │ Stage 2b  BASS       │
-  │ ADTOF → drum MIDI│    │ basic-pitch → MIDI   │   [Apache-2.0]
-  │ (onset fallback) │    │ (+ torchcrepe octave │
-  │        [NC*]     │    │  correction, + tab)  │
-  └──────────────────┘    └──────────────────────┘
-       │ drum hits
-       ▼
-  ┌──────────────────────────┐
-  │ Stage 3  QUANTIZE        │   madmom beat/tempo (librosa    [BSD]
-  │ snap onsets to bar grid  │   fallback)
-  └──────────────────────────┘
-       │
-       ▼
-  ┌──────────────────────────┐
-  │ Stage 4  NOTATION        │   music21 → MusicXML → PDF      [BSD/GPL]
-  │ → drum sheet music       │   (MuseScore CLI renders PDF)
-  └──────────────────────────┘
+## What it does
 
-  * ADTOF weights are non-commercial (fine for personal learning).
-    A commercial-safe swap is OaF-Drums (Apache-2.0).
-```
+- **Splits any song into stems** (drums / bass / vocals / guitars) with
+  [Demucs v4](https://github.com/facebookresearch/demucs), the open-source
+  state of the art — on dense, distorted mixes included.
+- **Mixer-board web UI**: a fader per stem with mute/solo, so you can drum
+  along with the band minus the drummer, or isolate the kit to learn it.
+- **Practice tools**: slow playback to 50% *with pitch preserved*, and an
+  A–B loop for drilling one riff or fill.
+- **Drum sheet music**: transcribes the drum stem to MIDI and engraves it —
+  shown inline on the mixer page, downloadable as PDF/MusicXML/MIDI.
+- **Bass line too**: note transcription plus a playable ASCII tab.
+- **Download your mix**: the stem levels you set render straight to a WAV in
+  the browser.
 
-Each stage runs independently and **degrades gracefully**: if an optional
-dependency isn't installed, that stage is skipped with a clear message telling
-you exactly what to `pip install`, while the rest of the pipeline still runs.
-The package imports with zero heavy dependencies.
-
----
-
-## Install
-
-**Quick start — just the stem splitter (the reliable MVP):**
+## Quick start
 
 ```bash
-pip install -e .                 # core: numpy + pretty_midi
-pip install -e ".[separation]"   # adds Demucs (pulls torch/torchaudio)
+git clone https://github.com/Ben-K-Jordan/Drum-Extractor.git
+cd Drum-Extractor
+./install.sh          # creates .venv, installs everything, verifies itself
+.venv/bin/drum-extractor web
 ```
 
-**Full pipeline:**
+Open **http://127.0.0.1:8237** and drop a song in. The first run downloads the
+Demucs model weights (~300 MB); separation takes roughly the length of the
+track on CPU, much less with a GPU.
+
+<details>
+<summary><strong>Manual install / other options</strong></summary>
 
 ```bash
-pip install -e ".[all]"          # separation + drums(onset) + bass + notation
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[all]"        # separation + transcription + notation + web UI
+drum-extractor doctor          # shows what's ready and how to fix any gaps
 ```
 
-Three tools install separately because they're heavier or app-based:
+Pick-and-choose extras if you don't want everything: `[separation]` `[drums]`
+`[bass]` `[notation]` `[web]` — each stage degrades gracefully when its
+dependencies are absent, and error messages always name the exact install
+command.
 
-| Tool | Why separate | Install |
-|------|--------------|---------|
-| **ADTOF** (best drum transcriber) | no PyPI CLI package | `pip install -e ".[adtof]"` — installs ADTOF-pytorch (the `adtof` command) from git. There is **no** `pip install adtof`. |
-| **madmom** (beat tracking) | can be tricky to build; auto-falls back to librosa | `pip install ".[quantize]"` |
-| **MuseScore 4** (PDF rendering) | desktop app, not a pip package | install from [musescore.org](https://musescore.org), ensure `mscore`/`musescore4` is on PATH |
+**Optional upgrades**
 
-> A GPU makes Stage 1 much faster but isn't required — Demucs runs on CPU at
-> roughly 1–2× the track length per song.
+| What | Why | How |
+|---|---|---|
+| **ADTOF** | The best open drum transcriber (trained on rock/metal) — without it a rough built-in fallback is used | `pip install -e ".[adtof]"` |
+| **MuseScore 4** | PDF sheet export (MusicXML works without it) | [musescore.org](https://musescore.org), CLI on PATH |
+| **madmom** | Bar-accurate downbeat tracking (librosa fallback otherwise) | `pip install -e ".[quantize]"` — its old build chain can fail on modern Python, which is why it's not in `[all]` |
+| **audio-separator** | Blend a second drum model with Demucs (`--ensemble-model`) | `pip install -e ".[ensemble]"` |
 
----
-
-## Usage
-
-### Web UI (the easy way)
+**Docker**
 
 ```bash
-pip install -e ".[web,separation]"    # + notation/bass extras for the downloads
-drum-extractor web                    # -> http://127.0.0.1:8237
+docker build -t drum-extractor .
+docker run -p 8237:8237 -v drumx-output:/app/output drum-extractor
 ```
 
-Drop a song or recording on the page; when separation finishes you land on a
-**mixer board**: one fader per stem (drums, bass, vocals, guitars+), with
-mute/solo per channel and a master fader. From there:
+</details>
 
-- **Practice controls** — playback speed 50–100% with pitch preserved
-  (HTMLMediaElement `preservesPitch`), and an **A–B section loop** for
-  drilling a riff or fill.
-- **Sheet music inline** — the drum chart renders right on the page
-  (engraved to SVG by verovio; falls back to an embedded PDF when MuseScore
-  produced one).
-- **Download mix (your levels)** — rendered *in the browser* at exactly your
-  fader settings (Web Audio OfflineAudioContext → WAV), no re-processing.
-- **Download the drum sheet** (PDF when MuseScore is installed, else MusicXML),
-  the **drum MIDI**, and the **bass tab**.
+Not sure what's installed? **`drum-extractor doctor`** prints a checkup of
+every feature with the exact fix for anything missing.
 
-The server binds to localhost only by default and runs everything locally.
-CI (GitHub Actions) runs the full test suite **and an accuracy gate**: the
-groove bank is rebuilt and scored on every push, failing the build if
-aggregate F drops below 0.65.
+## Command line
 
-### Command line
+The web UI is the easy path; everything is also scriptable:
 
 ```bash
-# Full pipeline
-drum-extractor run song.mp3
-
-# Just isolate the stems (Stage 1)
-drum-extractor separate song.mp3 --stems drums,bass
-
-# Individual stages
-drum-extractor transcribe-drums output/song/stems/drums.wav
-drum-extractor transcribe-bass  output/song/stems/bass.wav
-drum-extractor notate           output/song/transcription.json
-
-# Fast-metal tips: finer grid for double-kick, recover fast kicks, and the
-# onset fallback if you haven't installed ADTOF yet
-drum-extractor run song.mp3 --grid 32 --boost-double-kick --drum-backend onset
-
-# Metal separation upgrade: blend a second drum model with Demucs (needs
-# `pip install audio-separator`); avg_fft/min_fft = UVR-style spectrogram blending
-drum-extractor run song.mp3 --ensemble-model model_bs_roformer_ep_317_sdr_12.9755.ckpt --ensemble-algorithm min_fft
-
-# Long track on a small GPU: shrink the Demucs split segment
-drum-extractor run song.mp3 --segment 10
+drum-extractor run song.mp3                    # full pipeline -> output/song/
+drum-extractor separate song.mp3               # stems only
+drum-extractor transcribe-drums stems/drums.wav
+drum-extractor notate output/song/transcription.json
+drum-extractor run song.mp3 --grid 32 --boost-double-kick   # fast-metal setup
 ```
 
-Outputs land in `output/<song>/`:
+`output/<song>/` contains the stems, `drums.mid`, `bass.mid`, `bass.tab.txt`,
+`drums.musicxml` (+ `drums.pdf` with MuseScore), a `drums_sonified.wav` you can
+A/B against the stem by ear, and `transcription.json` (re-notate any time
+without re-processing).
 
-```
-output/song/
-├── stems/drums.wav        # Stage 1
-├── stems/bass.wav
-├── drums.mid              # Stage 2a
-├── bass.mid               # Stage 2b
-├── bass.tab.txt
-├── transcription.json     # full intermediate representation
-├── drums.musicxml         # Stage 4 (+ drums.pdf if MuseScore is installed)
-├── drums_sonified.wav     # Phase 4: hear the transcription, A/B it by ear
-└── drum_onsets.csv        # Phase 4: load detected onsets into a DAW to verify
-```
+## How it works
 
-### Python API
+| Stage | Tool | License |
+|---|---|---|
+| Source separation | [Demucs v4](https://github.com/facebookresearch/demucs) `htdemucs_ft` | MIT |
+| Drum transcription | [ADTOF](https://github.com/MZehren/ADTOF) (via [ADTOF-pytorch](https://github.com/xavriley/ADTOF-pytorch)), with a built-in onset fallback | non-commercial* |
+| Bass transcription | [basic-pitch](https://github.com/spotify/basic-pitch) + [torchcrepe](https://github.com/maxrmorrison/torchcrepe) | Apache-2.0 / MIT |
+| Beat tracking | [madmom](https://github.com/CPJKU/madmom) or [librosa](https://github.com/librosa/librosa) | BSD / ISC |
+| Engraving | [music21](https://github.com/cuthbertLab/music21) → MusicXML → [verovio](https://github.com/rism-digital/verovio) SVG / [MuseScore](https://musescore.org) PDF | BSD / LGPL / GPL |
 
-```python
-from drum_extractor import run_pipeline, PipelineConfig, SeparationConfig, QuantizeConfig
+\* ADTOF's weights are CC BY-NC — fine for personal practice; swap in
+OaF-Drums (Apache-2.0) if you need a commercial-safe chain. This project's own
+code is MIT.
 
-config = PipelineConfig(
-    separation=SeparationConfig(model="htdemucs_ft", device="auto"),
-    quantize=QuantizeConfig(grid=32),   # finer grid for fast double-kick
-)
-result = run_pipeline("song.mp3", config)
-print(result.summary())
-print(result.stems.drums, result.drum_midi, result.musicxml)
-```
+Extras for fast metal: a **double-kick booster** (`--boost-double-kick`)
+recovers blast-tempo kicks from the low band that full-kit models merge
+(measured: kick recall 0.67 → 0.98 at 200 BPM), and an optional **two-model
+drum ensemble** with UVR-style spectral blending cuts distorted-guitar bleed.
 
-Or drive one stage at a time:
+## What to expect (honest version)
 
-```python
-from drum_extractor.separation import separate
-from drum_extractor.drums import transcribe_drums
-from drum_extractor.notation import notate_drums
+- **Stem separation is the solved half.** Drums come out clean even from dense
+  metal mixes; bass is clearly usable, though down-tuned distorted bass loses
+  some character.
+- **Sheet music is a draft, not gospel.** A mid-tempo groove transcribes into
+  a genuinely useful chart. Fast metal — blast beats, 200+ BPM double-kick,
+  dense cymbal work — comes out as a scaffold you correct by ear; that's the
+  current limit of *every* transcription tool, commercial ones included. The
+  `drums_sonified.wav` render exists exactly for that by-ear checking.
+- Cymbal/tom identity is the weakest area of automatic transcription;
+  kick/snare/hi-hat are the reliable core.
 
-stems = separate("song.mp3", "out/stems")
-hits = transcribe_drums(stems.drums)
-# ... quantize, then:
-# notate_drums(transcription, "out")
-```
+## Accuracy is measured, not hoped for
 
----
-
-## What to expect on metal / punk / rock
-
-**Where it shines**
-- **Drum stem** — the most robust stem for any separator, even on dense distorted mixes. Clean enough to practise against and to feed the transcriber.
-- **Bass stem** — the fundamental isolates cleanly under loud guitars; you'll clearly hear the line.
-- **Mid-tempo grooves** — kick/snare/hi-hat transcribe to a readable chart with light cleanup.
-- **Bass tab** — 4 strings, mostly single notes → clean, playable tab.
-
-**Where it struggles (be honest with yourself)**
-- **Fast double-bass / blast beats (200–280 BPM)** — hits ~50 ms apart merge; models *undercount kicks*. This is the single biggest limitation and it hits exactly the passages you most want charted.
-- **Simultaneous hits** (kick+snare+crash) and **cymbal/tom identity** are the weak spots of every model.
-- **Down-tuned distorted bass** loses its grind in separation and collides with the kick in the sub-bass; extracted pitch is *approximate* (5-string low B is below reliable pitch-tracking range).
-- **Articulations** — open/closed hi-hat, ghost notes, flams, chokes mostly don't survive to notation.
-
-**One line to internalise:** normal groove → trustworthy draft; fast metal →
-skeleton you verify by ear. No 2026 tool escapes this.
-
-**Levers that help:** always transcribe from the isolated drum stem (never the
-mix); use `--grid 32` for double-kick; feed the cleanest/DI bass you have. For
-steady-tempo songs, `QuantizeConfig(grid_mode="constant", fixed_tempo=...)`
-builds a uniform note-seq-style grid that shrugs off tracker dropouts; and
-`QuantizeConfig(min_bpm/max_bpm)` widens madmom's 55–215 BPM search for fast
-material.
-
----
-
-## Implementation status
-
-| Stage | Status | Notes |
-|-------|--------|-------|
-| 1. Separation | **Working** | Demucs Python API + CLI fallback, device auto-detect |
-| 2a. Drum transcription | **Working** | ADTOF backend + librosa onset fallback |
-| 2b. Bass transcription | **Working** | basic-pitch + optional torchcrepe octave fix + tab mapper |
-| 3. Quantization | **Working** | madmom with librosa fallback |
-| 4. Notation | **Working** | music21 → MusicXML (validated); PDF via MuseScore CLI |
-| P4. Double-kick booster | **Working** | low-pass kick-band onset recovery for fast double-bass |
-| P4. Ensemble drums | **Working** | average a 2nd model's drum stem with Demucs (via audio-separator) |
-| P4. Correction aids | **Working** | sonify the transcription to audio + onset CSV for by-ear checking |
-
-### What's actually been executed (not just written)
-
-Verified by running against the real libraries (38 passing tests + manual runs):
-
-- **MIDI I/O** — drum & bass write/read round-trip (pretty_midi).
-- **Stage 2a (onset), 3 (librosa), 4 (music21)** — full pipeline run on synthetic
-  audio → MIDI + validated MusicXML (percussion clef, x-noteheads, hands/feet voices).
-- **Stage 2b** — basic-pitch + torchcrepe transcribed a synthetic bass to notes + tab.
-- **Stage 1** — Demucs `api.Separator`/`save_audio` signatures verified against the
-  installed library and the tensor→file plumbing tested with real `save_audio`.
-  *The neural inference itself needs the model weights, which download on first
-  run on your machine* (the sandbox this was built in blocks the weights host).
-- **Phase 4** — double-kick booster recovers fast kicks (200 BPM synthetic test);
-  ensemble averaging and sonification tested; full pipeline run with them enabled.
-
-### Adversarial audit
-
-A 9-way parallel audit (static review of every module + dynamic testing in a
-real-dependency venv) with per-finding verification surfaced **16 confirmed
-defects** (10 false positives were rejected), all now fixed with regression
-tests. The most important:
-
-- **Anacrusis crash (high):** songs starting on a pickup produced a negative beat
-  that crashed the whole notation stage on the default madmom backend. Fixed.
-- **Overfull measures (high):** notes crossing a barline weren't split, corrupting
-  the engraved bars. Now capped at the barline so every measure is well-formed.
-- **`--crepe` fully broken (high):** `fmin=30` sat below torchcrepe's lowest bin and
-  collapsed the whole pitch track, silently corrupting correct low notes. Fixed.
-- **Phantom drum hits (medium):** the onset fallback's median threshold fabricated
-  kicks/snares on ~half of all onsets. Replaced with per-onset energy shares.
-- Plus non-120-BPM last-bar mislabeling, non-quarter-meter placement, tempo-less
-  `.mid` notation, IR-persistence ordering, and several robustness/UX fixes.
-
-### Benchmarked against the upstream projects
-
-A 6-way comparison read the real source of the projects we build on (Demucs,
-UVR, python-audio-separator, ADTOF / ADTOF-pytorch, basic-pitch, torchcrepe,
-music21, madmom, note-seq) and diffed it against ours. Most of our API usage
-came back **textbook-correct** (Demucs `Separator`, basic-pitch `predict`,
-music21 percussion staff, madmom DBN, two-voice hands/feet split). The
-comparison also caught real issues, now fixed:
-
-- **ADTOF never ran (critical):** our default command (`python -m adtof …`)
-  matches no real ADTOF install, so the flagship backend silently fell back to
-  the onset detector. Now targets ADTOF-pytorch's real `adtof` CLI, with output
-  detected by content (MIDI or text).
-- **Ensemble cancelled transients:** it averaged two separators' drum stems with
-  no time alignment (they emit the same hit a few samples apart). Now
-  cross-correlation-aligned before averaging, like UVR.
-- **`fixed_tempo` was cosmetic:** it relabeled the reported tempo but never
-  constrained tracking. Now fed into madmom (`min_bpm/max_bpm`) and librosa (`bpm=`).
-- **CREPE median over garbage frames:** the octave-refinement median included
-  unvoiced/decay frames. Now periodicity-thresholded (torchcrepe's recipe).
-- Plus basic-pitch note-length/threshold knobs exposed, `[all]` recomposed so it
-  can't drift, and an installable `[adtof]` extra.
-
-### Measured accuracy: the ground-truth groove bank
-
-The repo ships a **ground-truth accuracy bank**: programmatically generated
-grooves (rock, d-beat, 200 BPM double-kick, 220 BPM blast, gallops, fills,
-ghost notes) rendered to audio by our own synthesizer, so the true hits are
-known exactly and any transcriber can be scored with real F-measures:
+The repo ships a **ground-truth groove bank**: programmatically generated
+grooves (d-beat, blasts, gallops, fills…) rendered by a built-in synthesizer,
+so the true hits are known and any transcriber can be scored with real
+F-measures:
 
 ```bash
-drum-extractor bank-build -o bank --jitter-ms 5 --vel-jitter 8   # build it
-drum-extractor bank-eval bank --backend onset                    # score a backend
+drum-extractor bank-build -o bank
+drum-extractor bank-eval bank --backend onset   # or: --backend adtof
 ```
 
-Why a bank instead of training data: training-scale corpora already exist
-(ADTOF ~359h, E-GMD 444h) — personal-scale data is worth far more as a
-*benchmark* (measure → tune → regression-test accuracy). Every item is also an
-(audio, ground-truth MIDI) pair, i.e. fine-tuning-ready if we ever train.
+CI runs the full test suite **and this accuracy gate** on every push — a
+change that degrades transcription fails the build. The tuning story (including
+an overfitting mistake the process itself caught) is in
+[docs/development.md](docs/development.md), along with the full QA history:
+every module was adversarially audited and diffed against its upstream
+project's real source.
 
-It paid off immediately — the first run exposed that the onset fallback's
-intuition-set thresholds could *never* fire on a snare (F=0.00), and a first
-naive re-tune then overfit the synthesizer's spectra (caught by adversarial
-verification). The shipped setup is the robust version: **realistic synth
-voices** (band-limited hats/cymbals, snare with body+wires), a
-**dominance-based classifier** (strongest band always fires; a second
-instrument only on a high secondary share), and thresholds grid-searched
-**under hard constraints from held-out realistic proxies** with a safety
-margin. Onset-fallback F-scores (±50 ms):
+## Contributing / development
 
-| | cymbals | hihat | kick | snare | toms | overall |
-|---|---|---|---|---|---|---|
-| intuition-set thresholds | 0.00 | 0.82 | 0.12 | 0.00 | 0.00 | **0.46** |
-| shipped (robust-tuned) | 0.00 | 0.86 | 0.71 | 0.71 | 0.00 | **0.73** |
+```bash
+./install.sh --light          # everything except the heavy ML separation stack
+.venv/bin/pytest -q           # 90+ tests, no GPU or model downloads needed
+```
 
-The bank also validated the double-kick booster with numbers: on 200 BPM
-sixteenth double-kick, kick recall goes **0.67 → 0.98** with
-`--boost-double-kick` — but aggregate F *drops* on other material, so enable
-it for double-kick songs specifically, not globally.
+Issues and PRs welcome — especially real-world reports of where transcription
+falls down on your songs, and hand-corrected charts (each becomes an (audio,
+ground-truth) pair the bank can score against).
 
-Cymbal/tom identity remains the fallback's blind spot (F=0.00) — consistent
-with the research: that's what ADTOF is for. Run `bank-eval --backend adtof`
-on your machine once ADTOF is installed to see its scores on the same bank.
+## Credits
 
-### Known rough edges / good first customizations
-- **Kit mapping** — edit `PLACEMENT` / `CANONICAL_TO_GM` in `drum_extractor/gm_drum_map.py` to match your kit or notation preferences.
-- **ADTOF command** — defaults to ADTOF-pytorch's `adtof --audio {input} --out {output}` (writes MIDI); output is detected by content, so MIDI or `time\tpitch` text both work. Override `DrumTranscriptionConfig.adtof_command` for a different install (e.g. `omnizart drum transcribe`).
-- **Voice numbering** — exported MusicXML uses the standard convention: voice 1 = hands (stems up), voice 2 = feet (stems down).
-- **Grid choice** — `--grid` dominates readability (16 for rock, 32 for double-kick); tune per song.
-
----
-
-## Roadmap
-
-- [x] **Phase 0** — Stem splitter MVP (Demucs wrapper + CLI)
-- [x] **Phase 1** — Bass transcription + tab (basic-pitch)
-- [x] **Phase 2** — Drum transcription MVP (ADTOF + onset fallback)
-- [x] **Phase 3** — Notation / PDF (music21 + MuseScore)
-- [x] **Phase 4** — Metal quality upgrades: double-kick booster (kick-band onset recovery), RoFormer/SCNet drum-stem ensemble (via audio-separator), and by-ear correction aids (sonification + onset CSV)
-- [ ] **Phase 5** — Optional web UI (fork of spleeter-web) or a play-along practice view; a full click-to-fix correction GUI
-
----
-
-## Licenses & credits
-
-Code here is MIT. It orchestrates other people's models — respect their licenses:
-
-- **Demucs** — MIT (facebookresearch/demucs)
-- **ADTOF** — non-commercial (CC BY-NC-SA / research); fine for personal learning. Commercial-safe alternative: **OaF-Drums** (Apache-2.0).
-- **basic-pitch** — Apache-2.0 (Spotify) · **torchcrepe** — MIT
-- **madmom** — BSD (some modules academic-only) · **librosa** — ISC
-- **music21** — BSD · **MuseScore** — GPL-3 · **LilyPond/Verovio** — GPL/LGPL
-
-If you ever make this commercial, audit model *weights* specifically (some are
-trained on research-only datasets even when the code is permissive).
+Standing on the shoulders of [Demucs](https://github.com/facebookresearch/demucs),
+[ADTOF](https://github.com/MZehren/ADTOF), [basic-pitch](https://github.com/spotify/basic-pitch),
+[torchcrepe](https://github.com/maxrmorrison/torchcrepe), [librosa](https://librosa.org),
+[madmom](https://github.com/CPJKU/madmom), [music21](https://web.mit.edu/music21/),
+[verovio](https://www.verovio.org) and [MuseScore](https://musescore.org).

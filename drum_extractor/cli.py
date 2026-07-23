@@ -84,6 +84,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(tb)
     tb.add_argument("--crepe", action="store_true", help="Octave-correct with torchcrepe")
 
+    # doctor — environment checkup
+    sub.add_parser("doctor", help="Check which features are installed and how to fix the gaps")
+
     # web — local UI: drop a song, mix stems, download results
     web = sub.add_parser("web", help="Launch the local web UI (drop page -> stem mixer -> downloads)")
     _add_common(web)
@@ -194,6 +197,12 @@ def _cmd_transcribe_bass(args) -> int:
     return 0
 
 
+def _cmd_doctor(args) -> int:
+    from .doctor import doctor_main
+
+    return doctor_main()
+
+
 def _cmd_web(args) -> int:
     from .web.server import create_app, default_config_factory
 
@@ -279,6 +288,7 @@ _COMMANDS = {
     "separate": _cmd_separate,
     "transcribe-drums": _cmd_transcribe_drums,
     "transcribe-bass": _cmd_transcribe_bass,
+    "doctor": _cmd_doctor,
     "web": _cmd_web,
     "bank-build": _cmd_bank_build,
     "bank-eval": _cmd_bank_eval,
