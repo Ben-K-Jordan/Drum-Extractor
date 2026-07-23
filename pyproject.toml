@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drum-extractor"
+version = "0.1.0"
+description = "Isolate drums & bass from a song and transcribe drums to sheet music (built for metal/punk/rock practice)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Drum-Extractor" }]
+keywords = ["music", "source-separation", "demucs", "drum-transcription", "sheet-music", "metal"]
+
+# Core deps are light: the pipeline data model + MIDI I/O. Heavy, stage-specific
+# tools live in the optional extras below so you install only what you use.
+dependencies = [
+    "numpy>=1.22",
+    "pretty_midi>=0.2.10",
+]
+
+[project.optional-dependencies]
+# Stage 1 — source separation. Pulls torch/torchaudio via demucs.
+separation = ["demucs>=4.0.0"]
+
+# Stage 2a — drum transcription fallback + audio analysis.
+# NOTE: the primary ADTOF backend is installed separately (`pip install adtof`);
+# it has its own heavier deps. librosa powers the onset fallback and beat tracking.
+drums = ["librosa>=0.10.0", "soundfile>=0.12"]
+
+# Stage 2b — bass transcription.
+bass = ["basic-pitch>=0.3.0"]
+bass-crepe = ["torchcrepe>=0.0.20", "librosa>=0.10.0"]
+
+# Stage 3 — beat tracking / quantization. madmom is powerful but can be tricky to
+# build; the stage falls back to librosa automatically if madmom is unavailable.
+quantize = ["madmom>=0.16.1", "librosa>=0.10.0"]
+
+# Stage 4 — notation. music21 builds the MusicXML; PDF rendering needs the
+# MuseScore 4 app installed separately (its CLI, `mscore`, on PATH).
+notation = ["music21>=9.1.0"]
+
+# Everything except ADTOF (installed on its own) and madmom (optional, finicky).
+all = [
+    "demucs>=4.0.0",
+    "librosa>=0.10.0",
+    "soundfile>=0.12",
+    "basic-pitch>=0.3.0",
+    "torchcrepe>=0.0.20",
+    "music21>=9.1.0",
+]
+
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+drum-extractor = "drum_extractor.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ben-k-jordan/drum-extractor"
+
+[tool.setuptools.packages.find]
+include = ["drum_extractor*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Model weights / caches (downloaded on demand, can be large)
+*.pt
+*.th
+*.ckpt
+*.onnx
+.cache/
+pretrained_models/
+
+# Pipeline output (audio stems, MIDI, scores)
+output/
+stems/
+*.wav
+*.flac
+*.mp3
+*.mid
+*.midi
+*.musicxml
+*.pdf
+
+# Keep example placeholders if any are added intentionally
+!examples/**/*.md
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
