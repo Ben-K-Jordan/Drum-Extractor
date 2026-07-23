@@ -63,6 +63,8 @@
   #sheetbox { background:#f5f2ea; border-radius:8px; margin-top:.7rem; max-height:70vh; overflow:auto; padding:.7rem; }
   #sheetbox svg { max-width:100%; height:auto; display:block; margin:0 auto .6rem; }
   #sheetbox object { width:100%; height:65vh; border:0; }
+  details.sheet pre { background:#10131a; border-radius:8px; margin-top:.7rem; max-height:50vh; overflow:auto;
+                      padding:.8rem 1rem; color:#c9d1de; font:12px/1.45 ui-monospace,Consolas,monospace; }
 </style>
 </head>
 <body>
@@ -101,6 +103,8 @@
       <div id="sheetbox"></div>
     </details>
 
+    <div id="tabpanels"></div>
+
     <div class="downloads" id="downloads">
       <button class="primary" id="dlmix">&#8681; Download mix (your levels)</button>
     </div>
@@ -109,7 +113,13 @@
 
 <script>
 const JOB = {{ job_id | tojson }};
-const NICE = { drums:'Drums', bass:'Bass', other:'Guitars+', vocals:'Vocals' };
+// 'other' is everything-but-drums/bass/vocals on the 4-stem model, but once a
+// dedicated guitar stem exists it's genuinely "other".
+function niceName(name, stems) {
+  const base = { drums:'Drums', bass:'Bass', guitar:'Guitar', piano:'Keys', vocals:'Vocals',
+                 other: ('guitar' in stems) ? 'Other' : 'Guitars+' };
+  return base[name] || name;
+}
 
 const state = {
   ctx: null, master: null,
@@ -163,9 +173,35 @@ async function loadStems(job) {
   }
   buildBoard(job);
   buildSheet(job);
+  buildTabs(job);
   document.getElementById('processing').style.display = 'none';
   document.getElementById('console').style.display = 'flex';
   updateClock();
+}
+
+async function buildTabs(job) {
+  const host = document.getElementById('tabpanels');
+  const specs = [
+    ['tab',  'Bass tab'],
+    ['gtab', 'Guitar tab'],
+  ];
+  for (const [key, label] of specs) {
+    const d = (job.downloads || {})[key];
+    if (!d) continue;
+    try {
+      const res = await fetch(d.url);
+      if (!res.ok) continue;
+      const text = await res.text();
+      const panel = document.createElement('details');
+      panel.className = 'sheet';
+      const pre = document.createElement('pre');
+      pre.textContent = text;
+      const summary = document.createElement('summary');
+      summary.textContent = label;
+      panel.append(summary, pre);
+      host.appendChild(panel);
+    } catch (e) { /* panel is a nicety; the download button still works */ }
+  }
 }
 
 // ---------- UI ----------
@@ -195,7 +231,7 @@ function buildBoard(job) {
     const solo = document.createElement('button');
     solo.textContent = 'S';
     solo.onclick = () => { s.solo = !s.solo; solo.classList.toggle('on-solo', s.solo); applyGains(); };
-    board.appendChild(strip(NICE[s.name] || s.name, v => { s.fader = v; applyGains(); }, [mute, solo]));
+    board.appendChild(strip(niceName(s.name, job.stems), v => { s.fader = v; applyGains(); }, [mute, solo]));
   }
   board.appendChild(strip('<span class="master-name">Master</span>', v => { state.master.gain.value = v; }));
 

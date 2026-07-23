@@ -82,6 +82,28 @@ class BassTranscriptionConfig:
 
 
 @dataclass
+class GuitarTranscriptionConfig:
+    """Optional — guitar stem -> notes + chord-aware tab.
+
+    Needs a guitar stem, i.e. the 6-stem Demucs model (``htdemucs_6s``); the
+    pipeline switches to it automatically when guitar transcription is enabled.
+    Honest expectations: clean/lead lines transcribe usefully; high-gain rhythm
+    guitar is the hardest signal in the whole pipeline and its tabs are a
+    starting sketch to correct by ear.
+    """
+
+    backend: str = "basic_pitch"  # "basic_pitch" | "none"
+    min_frequency: float = 70.0  # below E2 (82.4) to catch drop-D/C#
+    max_frequency: float = 1500.0  # ~24th fret on the high E
+    minimum_note_length_ms: float = 80.0
+    onset_threshold: float = 0.5
+    frame_threshold: float = 0.3
+    # Standard tuning E2 A2 D3 G3 B3 E4 as MIDI notes, low->high.
+    tuning: tuple[int, ...] = (40, 45, 50, 55, 59, 64)
+    frets: int = 24
+
+
+@dataclass
 class QuantizeConfig:
     """Stage 3 — snap onsets to a musical grid."""
 
@@ -121,6 +143,7 @@ class PipelineConfig:
     separation: SeparationConfig = field(default_factory=SeparationConfig)
     drums: DrumTranscriptionConfig = field(default_factory=DrumTranscriptionConfig)
     bass: BassTranscriptionConfig = field(default_factory=BassTranscriptionConfig)
+    guitar: GuitarTranscriptionConfig = field(default_factory=GuitarTranscriptionConfig)
     quantize: QuantizeConfig = field(default_factory=QuantizeConfig)
     notation: NotationConfig = field(default_factory=NotationConfig)
 
@@ -128,6 +151,9 @@ class PipelineConfig:
     do_separation: bool = True
     do_drum_transcription: bool = True
     do_bass_transcription: bool = True
+    # Guitar tabs are opt-in: they need the 6-stem model (slower, and the extra
+    # stems bleed a little more on dense mixes).
+    do_guitar_transcription: bool = False
     do_quantize: bool = True
     do_notation: bool = True
     # Phase 4 correction aid: render the drum transcription back to audio (+ an

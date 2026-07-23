@@ -52,11 +52,16 @@ def write_drum_midi(hits: list[DrumHit], path: Path, tempo: float | None = None,
     return path
 
 
-def write_bass_midi(notes: list[BassNote], path: Path, tempo: float | None = None) -> Path:
-    """Write bass notes to a standard (pitched) MIDI file, program 33 (Electric Bass)."""
+def write_bass_midi(
+    notes: list[BassNote], path: Path, tempo: float | None = None, program: int = 33, name: str = "Bass"
+) -> Path:
+    """Write pitched notes to a standard MIDI file (default: program 33, Electric Bass).
+
+    The guitar path reuses this with ``program=30`` (Distortion Guitar).
+    """
     pm = _pretty_midi()
     midi = pm.PrettyMIDI(initial_tempo=float(tempo) if tempo else 120.0)
-    bass = pm.Instrument(program=33, is_drum=False, name="Bass")
+    bass = pm.Instrument(program=program, is_drum=False, name=name)
     for n in notes:
         end = max(float(n.end), float(n.start) + 0.03)
         bass.notes.append(

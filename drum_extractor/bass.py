@@ -28,21 +28,53 @@ def transcribe_bass(bass_stem: str | Path, config: BassTranscriptionConfig | Non
     if config.backend != "basic_pitch":
         raise ValueError(f"Unknown bass transcription backend: {config.backend!r}")
 
+    notes = basic_pitch_notes(
+        bass_stem,
+        feature="Bass transcription",
+        min_frequency=config.min_frequency,
+        max_frequency=config.max_frequency,
+        minimum_note_length_ms=config.minimum_note_length_ms,
+        onset_threshold=config.onset_threshold,
+        frame_threshold=config.frame_threshold,
+    )
+
+    if config.refine_with_crepe:
+        notes = _refine_octaves_with_crepe(bass_stem, notes, config.min_frequency)
+
+    assign_tab(notes, config)
+    log.info("Bass: %d notes transcribed", len(notes))
+    return notes
+
+
+def basic_pitch_notes(
+    stem: str | Path,
+    feature: str,
+    min_frequency: float,
+    max_frequency: float,
+    minimum_note_length_ms: float,
+    onset_threshold: float,
+    frame_threshold: float,
+) -> list[BassNote]:
+    """Run basic-pitch on ``stem`` and return sorted note events.
+
+    Shared by the bass and guitar paths — basic-pitch is polyphonic, so the
+    same engine reads chords for guitar.
+    """
     try:
         from basic_pitch.inference import predict  # type: ignore
         from basic_pitch import ICASSP_2022_MODEL_PATH  # type: ignore
     except ModuleNotFoundError as exc:
-        raise MissingDependencyError("Bass transcription", "basic-pitch", extra="bass") from exc
+        raise MissingDependencyError(feature, "basic-pitch", extra="bass") from exc
 
-    log.info("Transcribing bass with basic-pitch (%.0f-%.0f Hz)", config.min_frequency, config.max_frequency)
+    log.info("%s with basic-pitch (%.0f-%.0f Hz)", feature, min_frequency, max_frequency)
     _model_output, midi_data, _note_events = predict(
-        str(bass_stem),
+        str(stem),
         model_or_model_path=ICASSP_2022_MODEL_PATH,
-        minimum_frequency=config.min_frequency,
-        maximum_frequency=config.max_frequency,
-        minimum_note_length=config.minimum_note_length_ms,
-        onset_threshold=config.onset_threshold,
-        frame_threshold=config.frame_threshold,
+        minimum_frequency=min_frequency,
+        maximum_frequency=max_frequency,
+        minimum_note_length=minimum_note_length_ms,
+        onset_threshold=onset_threshold,
+        frame_threshold=frame_threshold,
     )
 
     notes: list[BassNote] = []
@@ -50,12 +82,6 @@ def transcribe_bass(bass_stem: str | Path, config: BassTranscriptionConfig | Non
         for n in inst.notes:
             notes.append(BassNote(start=float(n.start), end=float(n.end), pitch=int(n.pitch), velocity=int(n.velocity)))
     notes.sort(key=lambda n: (n.start, n.pitch))
-
-    if config.refine_with_crepe:
-        notes = _refine_octaves_with_crepe(bass_stem, notes, config.min_frequency)
-
-    assign_tab(notes, config)
-    log.info("Bass: %d notes transcribed", len(notes))
     return notes
 
 
@@ -119,97 +145,19 @@ def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote], min_frequ
 
 
 def assign_tab(notes: list[BassNote], config: BassTranscriptionConfig) -> None:
-    """Assign a (string, fret) to each note, minimising total hand movement.
+    """Assign (string, fret) to each note via the shared polyphonic tab engine.
 
-    Viterbi/DP over the candidate strings per note (globally optimal for the
-    movement cost, unlike a greedy pass which can paint itself into a corner).
-    Costs: fret distance to the previous note's fret, a small bias against open
-    strings mid-phrase, and — after a rest long enough to reposition the hand —
-    free movement with a gentle pull back toward the starting position.
-    Notes outside the fretboard keep ``string``/``fret`` as ``None``.
+    Chord-aware DP minimising hand movement + fret span (see :mod:`tabs`);
+    double-stops land on distinct strings. Notes outside the fretboard keep
+    ``string``/``fret`` as ``None``.
     """
-    from math import inf
+    from .tabs import assign_frets
 
-    tuning = config.tuning
-    START_FRET = 5  # neutral starting hand position
-    OPEN_BIAS = 0.5  # slight bias against open strings mid-phrase
-    REST_RESET_S = 1.5  # a rest this long lets the hand move for free
-    RESET_ANCHOR = 0.2  # gentle pull toward START_FRET after such a rest
-
-    candidates: list[list[tuple[int, int]]] = []
-    for n in notes:
-        candidates.append(
-            [(s, n.pitch - open_pitch) for s, open_pitch in enumerate(tuning) if 0 <= n.pitch - open_pitch <= config.frets]
-        )
-    playable = [i for i, c in enumerate(candidates) if c]
-    unreachable = len(notes) - len(playable)
-
-    if playable:
-        first = playable[0]
-        costs = [0.5 * abs(f - START_FRET) + (OPEN_BIAS if f == 0 else 0.0) for _, f in candidates[first]]
-        back: list[list[int]] = [[-1] * len(candidates[first])]
-        for prev_i, cur_i in zip(playable, playable[1:]):
-            gap = notes[cur_i].start - notes[prev_i].end
-            new_costs, new_back = [], []
-            for _s2, f2 in candidates[cur_i]:
-                best_c, best_j = inf, 0
-                for j, (_s1, f1) in enumerate(candidates[prev_i]):
-                    move = RESET_ANCHOR * abs(f2 - START_FRET) if gap > REST_RESET_S else abs(f2 - f1)
-                    c = costs[j] + move + (OPEN_BIAS if f2 == 0 else 0.0)
-                    if c < best_c:
-                        best_c, best_j = c, j
-                new_costs.append(best_c)
-                new_back.append(best_j)
-            costs, back = new_costs, back + [new_back]
-        # Backtrack the optimal path.
-        j = min(range(len(costs)), key=costs.__getitem__)
-        for k in range(len(playable) - 1, -1, -1):
-            i = playable[k]
-            notes[i].string, notes[i].fret = candidates[i][j]
-            j = back[k][j]
-
-    if unreachable:
-        log.warning(
-            "%d bass note(s) fall outside the fretboard range (%s); they are marked 'x' in the tab "
-            "but retain their true pitch in the MIDI.",
-            unreachable,
-            f"tuning low={tuning[0]}, {config.frets} frets",
-        )
+    assign_frets(notes, config.tuning, config.frets)
 
 
 def render_ascii_tab(notes: list[BassNote], config: BassTranscriptionConfig, columns: int = 80) -> str:
-    """Render a simple ASCII bass tab (one horizontal block).
+    """Render a chord-aware ASCII tab, wrapped into systems (see :mod:`tabs`)."""
+    from .tabs import render_ascii_tab as _render
 
-    This is a readable text preview, not engraved notation — good enough to
-    practise from and to sanity-check the transcription.
-    """
-    tuning = config.tuning
-    string_names = _string_names(tuning)
-    lanes: list[list[str]] = [[] for _ in tuning]
-    for n in notes:
-        if n.string is None or n.fret is None:
-            # Out-of-range note: keep it visible (and count-consistent with the
-            # MIDI) by marking it 'x' on the lowest string rather than dropping it.
-            token, target = "x", 0
-        else:
-            token, target = str(n.fret), n.string
-        width = max(len(token) + 1, 3)
-        for s in range(len(tuning)):
-            if s == target:
-                lanes[s].append(token.rjust(width - 1, "-") + "-")
-            else:
-                lanes[s].append("-" * width)
-
-    # Right-justify string labels to a common width so rows with a 2-char
-    # accidental name (e.g. 'F#') stay column-aligned with 1-char names.
-    label_w = max((len(nm) for nm in string_names), default=1)
-    lines = []
-    for s in range(len(tuning) - 1, -1, -1):  # highest string on top
-        body = "".join(lanes[s]) or "-" * 8
-        lines.append(f"{string_names[s].rjust(label_w)}|-{body}")
-    return "\n".join(lines)
-
-
-def _string_names(tuning: tuple[int, ...]) -> list[str]:
-    names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-    return [names[p % 12] for p in tuning]
+    return _render(notes, config.tuning, width=columns)

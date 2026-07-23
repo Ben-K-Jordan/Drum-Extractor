@@ -29,6 +29,8 @@ class PipelineResult:
     drum_midi: Path | None = None
     bass_midi: Path | None = None
     bass_tab: Path | None = None
+    guitar_midi: Path | None = None
+    guitar_tab: Path | None = None
     musicxml: Path | None = None
     pdf: Path | None = None
     drum_sonification: Path | None = None
@@ -43,6 +45,8 @@ class PipelineResult:
             ("drum MIDI", self.drum_midi),
             ("bass MIDI", self.bass_midi),
             ("bass tab", self.bass_tab),
+            ("guitar MIDI", self.guitar_midi),
+            ("guitar tab", self.guitar_tab),
             ("MusicXML", self.musicxml),
             ("drum sheet PDF", self.pdf),
             ("drum sonified", self.drum_sonification),
@@ -79,6 +83,17 @@ def run_pipeline(
             except Exception:  # a UI callback must never break the pipeline
                 pass
 
+    # Guitar tabs need a guitar stem, which only the 6-stem model produces.
+    # Auto-upgrade rather than silently skipping the stage the user asked for.
+    if config.do_guitar_transcription and "guitar" not in config.separation.stems:
+        config.separation.stems = tuple(config.separation.stems) + ("guitar",)
+        if config.separation.model in ("htdemucs", "htdemucs_ft"):
+            log.info(
+                "Guitar transcription enabled: switching Demucs model to htdemucs_6s "
+                "(the only one with a guitar stem; slightly more bleed on dense mixes)."
+            )
+            config.separation.model = "htdemucs_6s"
+
     # --- Stage 1: separation (the reliable core) ---
     if config.do_separation:
         from .separation import separate
@@ -106,6 +121,13 @@ def run_pipeline(
         _try(result, "bass transcription", lambda: _do_bass(result, config, song_dir))
     elif config.do_bass_transcription:
         result.warnings.append("bass transcription: no bass stem available")
+
+    # --- Optional: guitar transcription (needs the 6-stem model's guitar stem) ---
+    if config.do_guitar_transcription and result.stems.guitar:
+        notify("transcribing guitar")
+        _try(result, "guitar transcription", lambda: _do_guitar(result, config, song_dir))
+    elif config.do_guitar_transcription:
+        result.warnings.append("guitar transcription: no guitar stem available (needs htdemucs_6s)")
 
     # --- Stage 3: quantization (needs drum hits + an audio reference) ---
     if config.do_quantize and result.transcription.drum_hits:
@@ -176,6 +198,20 @@ def _do_bass(result: PipelineResult, config: PipelineConfig, song_dir: Path) -> 
         tab_path = song_dir / "bass.tab.txt"
         tab_path.write_text(render_ascii_tab(notes, config.bass))
         result.bass_tab = tab_path
+
+
+def _do_guitar(result: PipelineResult, config: PipelineConfig, song_dir: Path) -> None:
+    from .guitar import render_guitar_tab, transcribe_guitar
+    from .midi_io import write_bass_midi
+
+    notes = transcribe_guitar(result.stems.guitar, config.guitar)
+    if notes:
+        result.guitar_midi = write_bass_midi(
+            notes, song_dir / "guitar.mid", result.transcription.tempo, program=30, name="Guitar"
+        )
+        tab_path = song_dir / "guitar.tab.txt"
+        tab_path.write_text(render_guitar_tab(notes, config.guitar))
+        result.guitar_tab = tab_path
 
 
 def _do_quantize(result: PipelineResult, config: PipelineConfig, ref_audio: Path) -> None:

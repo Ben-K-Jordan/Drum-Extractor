@@ -53,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-quantize", action="store_true", help="Skip quantization")
     run.add_argument("--no-notation", action="store_true", help="Skip sheet-music generation")
     run.add_argument("--crepe", action="store_true", help="Octave-correct bass with torchcrepe")
+    run.add_argument(
+        "--guitar", action="store_true",
+        help="Also transcribe guitar to tabs (switches to the 6-stem Demucs model)",
+    )
     run.add_argument("--boost-double-kick", action="store_true", help="Recover fast double-kick (metal)")
     run.add_argument("--ensemble-model", default=None, help="audio-separator drum model to blend with Demucs")
     run.add_argument(
@@ -117,6 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
     be.add_argument("--boost-double-kick", action="store_true", help="Evaluate with the kick booster enabled")
     be.add_argument("--tolerance-ms", type=float, default=50.0, help="Onset match window (default 50ms)")
 
+    # transcribe-guitar — optional guitar tabs
+    tg = sub.add_parser("transcribe-guitar", help="Guitar stem -> guitar MIDI + chord tab")
+    tg.add_argument("guitar_stem", help="Isolated guitar stem (from htdemucs_6s)")
+    _add_common(tg)
+
     # notate — Stage 4
     nt = sub.add_parser("notate", help="Stage 4: transcription.json or drum MIDI -> sheet music")
     nt.add_argument("source", help="transcription.json or a drum .mid file")
@@ -143,6 +152,7 @@ def _cmd_run(args) -> int:
         bass=BassTranscriptionConfig(refine_with_crepe=args.crepe),
         quantize=QuantizeConfig(grid=args.grid),
         do_bass_transcription=not args.no_bass,
+        do_guitar_transcription=args.guitar,
         do_quantize=not args.no_quantize,
         do_notation=not args.no_notation,
         do_sonify=not args.no_sonify,
@@ -222,6 +232,23 @@ def _cmd_web(args) -> int:
     return 0
 
 
+def _cmd_transcribe_guitar(args) -> int:
+    from .config import GuitarTranscriptionConfig
+    from .guitar import render_guitar_tab, transcribe_guitar
+    from .midi_io import write_bass_midi
+
+    config = GuitarTranscriptionConfig()
+    notes = transcribe_guitar(args.guitar_stem, config)
+    stem = Path(args.guitar_stem).stem
+    out_mid = Path(args.output) / f"{stem}.mid"
+    write_bass_midi(notes, out_mid, program=30, name="Guitar")
+    out_tab = Path(args.output) / f"{stem}.tab.txt"
+    out_tab.parent.mkdir(parents=True, exist_ok=True)
+    out_tab.write_text(render_guitar_tab(notes, config))
+    print(f"{len(notes)} notes -> {out_mid}\ntab -> {out_tab}")
+    return 0
+
+
 def _cmd_bank_build(args) -> int:
     from .bank import build_bank
 
@@ -297,6 +324,7 @@ _COMMANDS = {
     "separate": _cmd_separate,
     "transcribe-drums": _cmd_transcribe_drums,
     "transcribe-bass": _cmd_transcribe_bass,
+    "transcribe-guitar": _cmd_transcribe_guitar,
     "doctor": _cmd_doctor,
     "web": _cmd_web,
     "bank-build": _cmd_bank_build,

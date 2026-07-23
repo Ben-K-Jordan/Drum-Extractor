@@ -22,7 +22,12 @@ Everything runs **locally** — your audio never leaves your machine.
   A–B loop for drilling one riff or fill.
 - **Drum sheet music**: transcribes the drum stem to MIDI and engraves it —
   shown inline on the mixer page, downloadable as PDF/MusicXML/MIDI.
-- **Bass line too**: note transcription plus a playable ASCII tab.
+- **Bass tabs**: note transcription plus a playable ASCII tab (chord-aware —
+  double-stops land on separate strings).
+- **Guitar tabs (optional)**: tick "also transcribe guitar" and the 6-stem
+  model adds Guitar & Keys channels plus a separate chord-aware guitar tab.
+  Honest caveat: clean/lead guitar transcribes usefully; high-gain rhythm
+  guitar is the hardest signal there is — treat those tabs as a first sketch.
 - **Download your mix**: the stem levels you set render straight to a WAV in
   the browser.
 
@@ -98,6 +103,7 @@ drum-extractor separate song.mp3               # stems only
 drum-extractor transcribe-drums stems/drums.wav
 drum-extractor notate output/song/transcription.json
 drum-extractor run song.mp3 --grid 32 --boost-double-kick   # fast-metal setup
+drum-extractor run song.mp3 --guitar                        # + guitar tabs (6-stem model)
 ```
 
 `output/<song>/` contains the stems, `drums.mid`, `bass.mid`, `bass.tab.txt`,

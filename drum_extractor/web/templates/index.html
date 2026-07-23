@@ -20,6 +20,8 @@
   #file { display:none; }
   #status { min-height:1.5rem; color:#8b93a3; }
   #status.error { color:#ff7b6b; }
+  .opt { display:flex; gap:.5rem; align-items:center; color:#aeb6c4; font-size:.9rem; }
+  .opt input { accent-color:#e05545; width:1.05rem; height:1.05rem; }
   .hint { color:#5c6474; font-size:.85rem; max-width:560px; text-align:center; }
 </style>
 </head>
@@ -32,6 +34,10 @@
     <p>{{ formats }}</p>
   </div>
   <input type="file" id="file" accept="audio/*">
+  <label class="opt">
+    <input type="checkbox" id="guitar">
+    Also transcribe guitar &rarr; tabs <span style="color:#5c6474">(uses the 6-stem model; slower, adds Guitar &amp; Keys channels)</span>
+  </label>
   <div id="status"></div>
   <p class="hint">Separation runs locally (Demucs). A full song takes roughly its own
      length on CPU, much less with a GPU — you'll land on the mixer as soon as the stems are ready.</p>
@@ -52,6 +58,7 @@ async function send(file) {
   status.textContent = `Uploading ${file.name}…`;
   const form = new FormData();
   form.append('song', file);
+  if (document.getElementById('guitar').checked) form.append('guitar', '1');
   try {
     const res = await fetch('/upload', { method: 'POST', body: form });
     const data = await res.json();

@@ -33,15 +33,22 @@ log = get_logger(__name__)
 
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".aiff", ".aif"}
 MIXER_STEMS = ("drums", "bass", "other", "vocals")
+MIXER_STEMS_6S = ("drums", "bass", "guitar", "piano", "other", "vocals")
 
 
 def default_config_factory(output_dir: Path, model: str = "htdemucs_ft", device: str = "auto"):
     """Build the per-job pipeline config used by the web UI."""
 
-    def make(job_id: str) -> PipelineConfig:
+    def make(job_id: str, guitar: bool = False) -> PipelineConfig:
+        # Guitar tabs need the 6-stem model's guitar stem; the mixer then also
+        # gets Guitar and Keys channels.
+        job_model = model
+        if guitar and model in ("htdemucs", "htdemucs_ft"):
+            job_model = "htdemucs_6s"
         return PipelineConfig(
             output_dir=output_dir / "jobs" / job_id,
-            separation=SeparationConfig(model=model, device=device, stems=MIXER_STEMS),
+            separation=SeparationConfig(model=job_model, device=device, stems=MIXER_STEMS_6S if guitar else MIXER_STEMS),
+            do_guitar_transcription=guitar,
             do_sonify=False,  # not useful in the web flow; saves time
         )
 
@@ -70,6 +77,10 @@ class Job:
                 downloads["midi"] = {"url": f"/download/{self.id}/midi", "label": "Drum MIDI"}
             if self.result.bass_tab:
                 downloads["tab"] = {"url": f"/download/{self.id}/tab", "label": "Bass tab"}
+            if self.result.guitar_tab:
+                downloads["gtab"] = {"url": f"/download/{self.id}/gtab", "label": "Guitar tab"}
+            if self.result.guitar_midi:
+                downloads["gmidi"] = {"url": f"/download/{self.id}/gmidi", "label": "Guitar MIDI"}
             d["downloads"] = downloads
             d["warnings"] = self.result.warnings
             # Inline sheet preview: SVG via verovio when available, else the PDF.
@@ -195,7 +206,11 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
         audio_path = upload_dir / f"{safe_stem}{suffix}"
         file.save(str(audio_path))
 
-        config = make_config(job.id)
+        want_guitar = request.form.get("guitar") in ("1", "true", "on")
+        try:
+            config = make_config(job.id, guitar=want_guitar)
+        except TypeError:  # custom factories that predate the guitar option
+            config = make_config(job.id)
         if sync:
             _run_job(job, audio_path, config)
         else:
@@ -253,6 +268,8 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
             "sheet": r.pdf or r.musicxml,
             "midi": r.drum_midi,
             "tab": r.bass_tab,
+            "gtab": r.guitar_tab,
+            "gmidi": r.guitar_midi,
         }.get(kind)
         if path is None or not Path(path).exists():
             abort(404)
