@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 from drum_extractor.doctor import MISSING, OK, format_report, run_doctor
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_doctor_runs_and_covers_every_stage():
@@ -40,7 +43,7 @@ def test_doctor_exit_code_reflects_core_health():
 def test_python_dash_m_entrypoint():
     out = subprocess.run(
         [sys.executable, "-m", "drum_extractor", "--version"],
-        capture_output=True, text=True, cwd="/home/user/Drum-Extractor",
+        capture_output=True, text=True, cwd=str(REPO_ROOT),
     )
     assert out.returncode == 0
     assert "drum-extractor" in out.stdout
