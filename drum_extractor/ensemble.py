@@ -42,19 +42,28 @@ def _combine_fft(arrays, mode: str):
     """Blend equal-shape stems in the spectrogram domain (UVR-style).
 
     Magnitudes are combined per time-frequency bin — ``avg_fft`` averages them,
-    ``min_fft`` keeps the minimum (suppressing artifacts only one model produced)
-    — and the first stem's phase is reused for reconstruction.
+    ``min_fft`` keeps the minimum (suppressing artifacts only one model produced).
+    Reconstruction uses the phase of the COMPLEX SUM of the stems: in a region
+    where one stem is only zero-padding, the sum's phase falls back to the stem
+    that actually has energy there (using stem 0's phase alone would resynthesize
+    the other stem's tail with constant zero phase — i.e. garble it).
+
+    The window is clamped to the input length so sub-window stems don't crash,
+    and everything runs in float32/complex64 to halve peak memory on long tracks.
     """
     import numpy as np  # type: ignore
     from scipy.signal import istft, stft  # type: ignore
 
     n, ch = arrays[0].shape
-    out = np.zeros((n, ch))
+    nper = min(4096, n)
+    nov = nper * 3 // 4
+    out = np.zeros((n, ch), dtype=np.float32)
     for c in range(ch):
-        specs = [stft(a[:, c], nperseg=4096, noverlap=3072)[2] for a in arrays]
+        specs = [stft(a[:, c].astype(np.float32), nperseg=nper, noverlap=nov)[2] for a in arrays]
         mags = np.stack([np.abs(z) for z in specs])
         mag = mags.mean(axis=0) if mode == "avg_fft" else mags.min(axis=0)
-        _, rec = istft(mag * np.exp(1j * np.angle(specs[0])), nperseg=4096, noverlap=3072)
+        phase = np.angle(np.sum(specs, axis=0))
+        _, rec = istft((mag * np.exp(1j * phase)).astype(np.complex64), nperseg=nper, noverlap=nov)
         out[:, c] = rec[:n] if len(rec) >= n else np.pad(rec, (0, n - len(rec)))
     return out
 
@@ -107,8 +116,12 @@ def average_stems(
         if a.shape[0] < max_len:
             log.debug("Padding stem by %d samples to match the longest", max_len - a.shape[0])
             a = np.pad(a, ((0, max_len - a.shape[0]), (0, 0)))
-        if a.shape[1] < max_ch:
-            a = np.repeat(a[:, :1], max_ch, axis=1)
+        if a.shape[1] == 1 and max_ch > 1:
+            a = np.repeat(a, max_ch, axis=1)  # broadcast true mono
+        elif a.shape[1] != max_ch:
+            # Anything else (e.g. stereo vs 4-channel) has no obviously-correct
+            # mapping; failing beats silently discarding channels.
+            raise ExternalToolError(f"Channel-count mismatch blending stems: {a.shape[1]} vs {max_ch}")
         norm.append(a)
     arrays = norm
 

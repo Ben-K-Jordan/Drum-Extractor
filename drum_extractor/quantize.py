@@ -27,6 +27,10 @@ def quantize(transcription: Transcription, audio_path: str | Path, config: Quant
     ``downbeats`` filled in and each hit's ``bar``/``beat`` annotated.
     """
     config = config or QuantizeConfig()
+    if config.backend not in ("madmom", "librosa", "none"):
+        raise ValueError(f"Unknown quantize backend: {config.backend!r}")
+    if config.grid_mode not in ("tracked", "constant"):
+        raise ValueError(f"Unknown grid_mode: {config.grid_mode!r} (use 'tracked' or 'constant')")
     if config.backend == "none":
         return transcription
 
@@ -47,7 +51,10 @@ def quantize(transcription: Transcription, audio_path: str | Path, config: Quant
     grid = _build_grid(beats, config, t_lo, t_hi)
     if grid:
         for hit in transcription.drum_hits:
-            hit.time = _snap(hit.time, grid)
+            # Clamp at 0: an extrapolated grid slot just before t=0 must not pull
+            # an early onset to a negative time (negative times are dropped by
+            # MIDI writers and crash sonification's sample indexing).
+            hit.time = max(0.0, _snap(hit.time, grid))
         transcription.drum_hits = _dedupe_hits(transcription.drum_hits)
         _annotate_bar_beat(transcription, downbeats or beats, config)
     log.info("Quantized to 1/%d grid at %.1f BPM (%d beats, %d bars)", config.grid, tempo or 0.0, len(beats), len(downbeats))
@@ -155,8 +162,11 @@ def _constant_beats(
     lo = t_lo if t_lo is not None else anchor
     hi = t_hi if t_hi is not None else anchor + bpb * period
 
-    # Extend backwards in WHOLE BARS so the anchor stays a downbeat.
+    # Extend backwards in WHOLE BARS so the anchor stays a downbeat — bounded
+    # like every other extension guard, so one absurd stray time can't starve
+    # the forward beat count (which shares the 100k cap).
     n_back = max(0, math.ceil((anchor - lo) / period)) if lo < anchor else 0
+    n_back = min(n_back, 256 * bpb)
     n_back += (-n_back) % bpb
     start = anchor - n_back * period
     count = min(int((hi - start) / period) + 2, 100_000)

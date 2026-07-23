@@ -143,6 +143,101 @@ def test_unknown_algorithm_rejected(tmp_path):
         average_stems([tmp_path / "a.wav"], tmp_path / "o.wav", algorithm="median_of_medians")
 
 
+# --- Verification-round fixes (adversarial review of this diff) -----------------------
+
+def test_fft_blend_preserves_longer_stems_tail_regardless_of_order(tmp_path):
+    """Zero-phase regression: with the SHORT stem first, the long stem's tail
+    used to be resynthesized with constant zero phase (garbage)."""
+    pytest.importorskip("scipy")
+    pytest.importorskip("soundfile")
+    import numpy as np
+    import soundfile as sf
+    from drum_extractor.ensemble import average_stems
+
+    sr = 22050
+    t2 = np.arange(2 * sr) / sr
+    long_sig = (0.5 * np.sin(2 * np.pi * 220 * t2)).astype("float32")[:, None]
+    short_sig = long_sig[: sr]
+    sf.write(str(tmp_path / "short.wav"), short_sig, sr)
+    sf.write(str(tmp_path / "long.wav"), long_sig, sr)
+
+    out = average_stems(
+        [tmp_path / "short.wav", tmp_path / "long.wav"],  # short FIRST (the bad order)
+        tmp_path / "blend.wav", align=False, algorithm="avg_fft",
+    )
+    y, _ = sf.read(str(out))
+    tail = slice(sr + 4096, 2 * sr - 4096)
+    corr = np.corrcoef(y[tail], long_sig[tail, 0])[0, 1]
+    assert corr > 0.9, f"long stem's tail was garbled (corr={corr:.3f})"
+
+
+def test_fft_blend_handles_sub_window_stems(tmp_path):
+    pytest.importorskip("scipy")
+    pytest.importorskip("soundfile")
+    import numpy as np
+    import soundfile as sf
+    from drum_extractor.ensemble import average_stems
+
+    for n in (1000, 3500):  # both former crash modes (<nperseg, istft mismatch)
+        for name in ("a", "b"):
+            sf.write(str(tmp_path / f"{name}{n}.wav"), np.random.default_rng(0).standard_normal((n, 1)).astype("float32") * 0.1, 22050)
+        out = average_stems([tmp_path / f"a{n}.wav", tmp_path / f"b{n}.wav"], tmp_path / f"o{n}.wav", align=False, algorithm="avg_fft")
+        y, _ = sf.read(str(out))
+        assert len(y) == n  # no ValueError, correct length
+
+
+def test_channel_mismatch_raises_not_discards(tmp_path):
+    pytest.importorskip("soundfile")
+    import numpy as np
+    import soundfile as sf
+    from drum_extractor.ensemble import average_stems
+    from drum_extractor.errors import ExternalToolError
+
+    sf.write(str(tmp_path / "st.wav"), np.zeros((1000, 2), dtype="float32"), 22050)
+    sf.write(str(tmp_path / "quad.wav"), np.zeros((1000, 4), dtype="float32"), 22050)
+    with pytest.raises(ExternalToolError):
+        average_stems([tmp_path / "st.wav", tmp_path / "quad.wav"], tmp_path / "o.wav", align=False)
+
+
+def test_constant_beats_backward_extension_is_bounded():
+    from drum_extractor.quantize import _constant_beats
+
+    _tempo, beats, _down = _constant_beats(
+        None, [0.5, 1.0], [0.5], QuantizeConfig(fixed_tempo=120.0, grid_mode="constant"),
+        t_lo=-60000.0, t_hi=200.0,  # one absurd stray time
+    )
+    assert beats[-1] >= 200.0  # the grid still reaches the actual song
+
+
+def test_early_onset_never_snaps_negative(tmp_path):
+    pytest.importorskip("librosa")
+    pytest.importorskip("soundfile")
+    import numpy as np
+    import soundfile as sf
+    from drum_extractor.quantize import quantize
+
+    # Click track whose first beat is late enough that backward extrapolation
+    # creates grid slots below zero; the early hit must still clamp to >= 0.
+    sr = 44100
+    y = np.zeros(4 * sr, dtype="float32")
+    for k in range(6):
+        i = int((0.4 + k * 0.5) * sr)
+        y[i : i + 300] = 0.8
+    sf.write(str(tmp_path / "c.wav"), y, sr)
+    tr = Transcription(drum_hits=[DrumHit(0.01, "kick"), DrumHit(0.9, "snare")])
+    quantize(tr, tmp_path / "c.wav", QuantizeConfig(backend="librosa"))
+    assert all(h.time >= 0.0 for h in tr.drum_hits)
+
+
+def test_unknown_grid_mode_rejected(tmp_path):
+    from drum_extractor.quantize import quantize
+
+    with pytest.raises(ValueError):
+        quantize(Transcription(), tmp_path / "x.wav", QuantizeConfig(grid_mode="consant"))  # typo
+    with pytest.raises(ValueError):
+        quantize(Transcription(), tmp_path / "x.wav", QuantizeConfig(backend="madmon"))  # typo
+
+
 # --- DP tab mapper --------------------------------------------------------------------
 
 def test_dp_tab_keeps_phrase_on_one_string():
