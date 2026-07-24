@@ -537,6 +537,19 @@ def test_rerun_without_bass_removes_stale_bass_outputs(tmp_path):
         assert not (song_dir / stale).exists(), f"stale {stale} survived a --no-bass rerun"
 
 
+def test_drum_part_abbreviation_is_not_perc(tmp_path):
+    """Continuation systems print the part ABBREVIATION: music21's generic
+    Percussion says 'Perc', which made system 2+ look like a separate
+    percussion part instead of the same drum staff."""
+    pytest.importorskip("music21")
+    from drum_extractor.notation import transcription_to_musicxml
+
+    tr = Transcription(drum_hits=[DrumHit(0.0, "kick", 100, bar=1, beat=0.0)], tempo=120.0)
+    xml = transcription_to_musicxml(tr, tmp_path / "p.musicxml", NotationConfig(), QuantizeConfig()).read_text()
+    assert "<part-abbreviation>Dr.</part-abbreviation>" in xml
+    assert "Perc" not in xml
+
+
 def test_visible_rests_in_exported_musicxml(tmp_path):
     """Verification-round regression: the unhide-rests pass must run on the
     EXPORTED file — music21 injects print-object='no' rests during export."""

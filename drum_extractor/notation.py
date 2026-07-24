@@ -75,7 +75,14 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
 
     part = stream.Part()
     part.partName = "Drums"
-    part.insert(0, instrument.Percussion())
+    # The abbreviation prints on every system AFTER the first: music21's
+    # generic Percussion carries "Perc", which made continuation systems look
+    # like a separate percussion part instead of the same drum staff.
+    part.partAbbreviation = "Dr."
+    kit = instrument.Percussion()
+    kit.instrumentName = "Drums"
+    kit.instrumentAbbreviation = "Dr."
+    part.insert(0, kit)
     part.insert(0, clef.PercussionClef())
     part.insert(0, meter.TimeSignature(f"{beats_per_bar}/{beat_unit}"))
     if transcription.tempo:
