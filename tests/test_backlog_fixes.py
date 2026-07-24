@@ -318,6 +318,12 @@ def test_segment_flag_reaches_demucs_cli(tmp_path, monkeypatch):
 
     def fake_run(cmd, check=True, **kwargs):
         captured["cmd"] = cmd
+        # Write the layout the real CLI produces, so the exit-0-but-no-files
+        # guard (a separate audited fix) doesn't fire on this happy path.
+        track_dir = tmp_path / "out" / "htdemucs_ft" / "song"
+        track_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("drums", "bass"):
+            (track_dir / f"{name}.wav").write_bytes(b"RIFF")
         return _Result()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -326,7 +332,24 @@ def test_segment_flag_reaches_demucs_cli(tmp_path, monkeypatch):
     stems = _separate_cli(tmp_path / "song.wav", tmp_path / "out", SeparationConfig(segment=12), "cpu")
     assert "--segment" in captured["cmd"]
     assert "12" in captured["cmd"]
-    assert stems.drums is None  # the fake produced nothing; no crash
+    assert stems.drums and stems.drums.exists()
+
+
+def test_cli_exit_zero_but_no_stems_raises(tmp_path, monkeypatch):
+    """Demucs exiting 0 without writing stems must fail loudly, not return Stems()."""
+    import subprocess
+
+    import pytest
+
+    from drum_extractor.errors import ExternalToolError
+    from drum_extractor.separation import _separate_cli
+
+    class _Result:
+        returncode = 0
+
+    monkeypatch.setattr(subprocess, "run", lambda cmd, check=True, **k: _Result())
+    with pytest.raises(ExternalToolError, match="wrote no"):
+        _separate_cli(tmp_path / "song.wav", tmp_path / "out", SeparationConfig(), "cpu")
 
 
 def test_cli_flags_parse():

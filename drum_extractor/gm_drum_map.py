@@ -75,6 +75,12 @@ GM_TO_CANONICAL: dict[int, str] = {
     52: CHINA,
     53: RIDE_BELL,
     55: SPLASH,
+    # Auxiliary GM percussion mapped to the nearest kit voice, so a real-world
+    # MIDI doesn't silently collapse everything unknown onto the snare line.
+    39: SNARE,         # Hand Clap -> snare line
+    54: HIHAT_CLOSED,  # Tambourine -> hat line
+    56: RIDE_BELL,     # Cowbell -> bell notehead
+    75: SIDE_STICK,    # Claves -> stick click
 }
 
 # The 5-class vocabulary most ADT models (ADTOF) emit -> canonical name.

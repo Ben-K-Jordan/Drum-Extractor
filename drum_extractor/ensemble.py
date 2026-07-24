@@ -102,6 +102,8 @@ def average_stems(
     sr = None
     for p in paths:
         y, file_sr = sf.read(str(p), always_2d=True)  # (samples, channels)
+        if y.shape[0] == 0:
+            raise ExternalToolError(f"Stem file is empty: {p}")
         sr = sr or file_sr
         if file_sr != sr:
             raise ExternalToolError(f"Sample-rate mismatch averaging stems: {file_sr} vs {sr}")
@@ -131,7 +133,14 @@ def average_stems(
         for i in range(1, len(arrays)):
             lag = _best_lag(ref, arrays[i].mean(axis=1), max_lag)
             if lag:
-                arrays[i] = np.roll(arrays[i], lag, axis=0)
+                # Zero-fill shift, NOT np.roll: roll wraps the stem's tail
+                # around to t=0, injecting a spurious transient at the start.
+                shifted = np.zeros_like(arrays[i])
+                if lag > 0:
+                    shifted[lag:] = arrays[i][:-lag]
+                else:
+                    shifted[:lag] = arrays[i][-lag:]
+                arrays[i] = shifted
                 log.info("Aligned stem %d by %+d samples (%.1f ms)", i, lag, 1000.0 * lag / sr)
 
     if algorithm == "avg_wave":
@@ -198,13 +207,11 @@ def ensemble_drums(
 ) -> Path:
     """Blend the Demucs drums with a second model's drums, returning the blended stem.
 
-    Falls back to the Demucs drums unchanged if the second model is unavailable,
-    so callers can request the upgrade without hard-failing when it isn't set up.
+    Raises :class:`MissingDependencyError`/:class:`ExternalToolError` when the
+    second model is unavailable — the pipeline catches these, keeps the Demucs
+    drums unchanged, and records the skip in the run's warnings (a silent
+    fallback here left no trace that an explicitly requested ensemble never ran).
     """
     out_dir = Path(out_dir)
-    try:
-        second = audio_separator_drums(mix_path, out_dir / "ensemble_tmp", model)
-    except (MissingDependencyError, ExternalToolError) as exc:
-        log.warning("Ensemble skipped (%s); using Demucs drums as-is.", exc)
-        return Path(demucs_drums)
+    second = audio_separator_drums(mix_path, out_dir / "ensemble_tmp", model)
     return average_stems([demucs_drums, second], out_dir / "drums_ensemble.wav", algorithm=algorithm)

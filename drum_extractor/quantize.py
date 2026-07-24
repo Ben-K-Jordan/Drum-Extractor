@@ -164,8 +164,13 @@ def _constant_beats(
 
     # Extend backwards in WHOLE BARS so the anchor stays a downbeat — bounded
     # like every other extension guard, so one absurd stray time can't starve
-    # the forward beat count (which shares the 100k cap).
-    n_back = max(0, math.ceil((anchor - lo) / period)) if lo < anchor else 0
+    # the forward beat count (which shares the 100k cap). Only extend when an
+    # onset is more than HALF A GRID STEP early: onset detectors routinely fire
+    # a few ms before the tracked downbeat, and those hits snap forward onto
+    # the anchor anyway — extending for them would prepend a bar that ends up
+    # completely empty (shifting every bar number and creating negative beats).
+    half_step = period / max(1, config.grid // config.beat_unit) / 2.0
+    n_back = max(0, math.ceil((anchor - lo) / period)) if lo < anchor - half_step else 0
     n_back = min(n_back, 256 * bpb)
     n_back += (-n_back) % bpb
     start = anchor - n_back * period

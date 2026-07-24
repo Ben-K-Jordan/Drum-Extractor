@@ -124,6 +124,22 @@ class QuantizeConfig:
     min_bpm: float | None = None
     max_bpm: float | None = None
 
+    def __post_init__(self) -> None:
+        # These are reachable straight from CLI flags; a bad value must fail
+        # with a sentence, not a ZeroDivisionError three stages later.
+        if self.grid < 1:
+            raise ValueError(f"grid must be >= 1 (got {self.grid}); typical values: 8, 16, 32")
+        if self.beats_per_bar < 1 or self.beat_unit < 1:
+            raise ValueError(f"beats_per_bar/beat_unit must be >= 1 (got {self.beats_per_bar}/{self.beat_unit})")
+        if self.fixed_tempo is not None and self.fixed_tempo <= 0:
+            raise ValueError(f"fixed_tempo must be positive (got {self.fixed_tempo})")
+        for name in ("min_bpm", "max_bpm"):
+            v = getattr(self, name)
+            if v is not None and v <= 0:
+                raise ValueError(f"{name} must be positive (got {v})")
+        if self.min_bpm and self.max_bpm and self.min_bpm >= self.max_bpm:
+            raise ValueError(f"min_bpm ({self.min_bpm}) must be below max_bpm ({self.max_bpm})")
+
 
 @dataclass
 class NotationConfig:

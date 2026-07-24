@@ -72,7 +72,21 @@ def sonify_drums(hits: list[DrumHit], out_path: str | Path, sr: int = 44100, tai
     if not hits:
         raise ValueError("No hits to sonify.")
 
-    duration = max(h.time for h in hits) + tail
+    # Validate times: a NaN crashes int(); a negative time would wrap around
+    # numpy's negative indexing and render the sound near the END of the file.
+    import math
+
+    clean = [h for h in hits if math.isfinite(h.time) and h.time >= 0]
+    if len(clean) != len(hits):
+        log.warning("Sonification: dropped %d hit(s) with negative/non-finite times.", len(hits) - len(clean))
+    if not clean:
+        raise ValueError("No hits with valid (finite, >= 0) times to sonify.")
+    max_time = max(h.time for h in clean)
+    if max_time > 3600.0:  # one bogus far-future hit would allocate GBs
+        raise ValueError(f"Refusing to render {max_time / 3600:.1f}h of audio — latest hit at {max_time:.0f}s looks corrupt.")
+    hits = clean
+
+    duration = max_time + tail
     n = int(duration * sr)
     buf = np.zeros(n, dtype=np.float32)
     rng = np.random.default_rng(0)
@@ -112,10 +126,10 @@ def sonify_drums(hits: list[DrumHit], out_path: str | Path, sr: int = 44100, tai
 
 
 def write_onset_csv(hits: list[DrumHit], out_path: str | Path) -> Path:
-    """Write a ``time,instrument,velocity`` CSV for loading onsets into a DAW/editor."""
+    """Write a ``time_sec,instrument,velocity_midi`` CSV for DAW/editor import."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["time,instrument,velocity"]
+    lines = ["time_sec,instrument,velocity_midi"]
     for h in sorted(hits, key=lambda x: x.time):
         lines.append(f"{h.time:.4f},{h.instrument},{h.velocity}")
     out_path.write_text("\n".join(lines) + "\n")

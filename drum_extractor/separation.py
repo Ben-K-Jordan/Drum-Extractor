@@ -102,15 +102,27 @@ def _separate_api(audio_path: Path, out_dir: Path, config: SeparationConfig, dev
                 except Exception:  # a UI callback must never break separation
                     pass
 
-    separator = Separator(
-        model=config.model,
-        device=device,
-        shifts=config.shifts,
-        overlap=config.overlap,
-        segment=config.segment,  # None -> model default; lower to save GPU memory
-        jobs=config.jobs,
-        callback=callback,
-    )
+    from urllib.error import URLError
+
+    try:
+        separator = Separator(
+            model=config.model,
+            device=device,
+            shifts=config.shifts,
+            overlap=config.overlap,
+            segment=config.segment,  # None -> model default; lower to save GPU memory
+            jobs=config.jobs,
+            callback=callback,
+        )
+    except URLError as exc:
+        # The likely first-run failure for offline/proxied users: a bare
+        # urlopen error says nothing about WHAT was downloading.
+        raise ExternalToolError(
+            f"Could not download the Demucs model weights for '{config.model}' (~300 MB, "
+            f"fetched on first use from dl.fbaipublicfiles.com): {exc}. "
+            "Check your network/proxy, or pre-download on a connected machine "
+            '(python -c "from demucs.pretrained import get_model; get_model(\'htdemucs_ft\')").'
+        ) from exc
     _origin, separated = separator.separate_audio_file(str(audio_path))
     return _save_stems(separated, out_dir, config, separator.samplerate)
 
@@ -126,6 +138,14 @@ def _save_stems(separated: dict, out_dir: Path, config: SeparationConfig, sample
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # A typo'd stem name ('drum', 'bas') would otherwise run the whole
+    # separation and then silently write nothing.
+    unknown = [s for s in config.stems if s not in separated]
+    if unknown:
+        raise ExternalToolError(
+            f"Unknown stem name(s) {', '.join(unknown)!s} — model '{config.model}' "
+            f"produces: {', '.join(sorted(separated))}"
+        )
     stems = Stems()
     ext = "mp3" if config.mp3 else "wav"
     for name, source in separated.items():
@@ -193,4 +213,15 @@ def _separate_cli(audio_path: Path, out_dir: Path, config: SeparationConfig, dev
                 shutil.move(str(candidate), str(flat))
             setattr(stems, name, flat)
             log.info("  -> %s", flat)
+    missing = [n for n in config.stems if getattr(stems, n, None) is None]
+    if missing:
+        # Exit 0 with no files would otherwise surface downstream as the
+        # misleading "no drum stem available".
+        raise ExternalToolError(
+            f"Demucs CLI succeeded but wrote no {', '.join(missing)} stem(s) under {track_dir} — "
+            f"check the stem names (model '{config.model}') and the demucs version's output layout."
+        )
+    # The residue tree still holds every UNREQUESTED stem (vocals, other, ...):
+    # that's most of a run's disk usage, and nothing reads it again.
+    shutil.rmtree(out_dir / config.model, ignore_errors=True)
     return stems

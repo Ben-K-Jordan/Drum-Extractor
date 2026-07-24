@@ -119,4 +119,4 @@ def test_pipeline_with_phase4_booster_and_sonify(tmp_path):
     # Correction aids were produced and are real files.
     assert result.drum_sonification and result.drum_sonification.exists()
     assert result.onset_csv and result.onset_csv.exists()
-    assert result.onset_csv.read_text().startswith("time,instrument,velocity")
+    assert result.onset_csv.read_text().startswith("time_sec,instrument,velocity_midi")

@@ -58,12 +58,26 @@ class Stems:
         return {k: v for k, v in asdict(self).items() if v is not None}
 
 
+def _fields_only(cls, d: dict) -> dict:
+    """Keep only keys that are dataclass fields of ``cls``.
+
+    A transcription.json written by a newer version (or hand-annotated) may
+    carry extra keys; loading it should not crash with a TypeError.
+    """
+    names = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+    return {k: v for k, v in d.items() if k in names}
+
+
 @dataclass
 class Transcription:
     """Everything the pipeline knows about a song after transcription."""
 
+    FORMAT = "drum-extractor/transcription"
+    VERSION = 1
+
     drum_hits: list[DrumHit] = field(default_factory=list)
     bass_notes: list[BassNote] = field(default_factory=list)
+    guitar_notes: list[BassNote] = field(default_factory=list)
     tempo: float | None = None
     beats: list[float] = field(default_factory=list)
     downbeats: list[float] = field(default_factory=list)
@@ -71,8 +85,11 @@ class Transcription:
 
     def to_dict(self) -> dict:
         return {
+            "format": self.FORMAT,
+            "version": self.VERSION,
             "drum_hits": [asdict(h) for h in self.drum_hits],
             "bass_notes": [asdict(n) for n in self.bass_notes],
+            "guitar_notes": [asdict(n) for n in self.guitar_notes],
             "tempo": self.tempo,
             "beats": self.beats,
             "downbeats": self.downbeats,
@@ -82,8 +99,9 @@ class Transcription:
     @classmethod
     def from_dict(cls, d: dict) -> Transcription:
         return cls(
-            drum_hits=[DrumHit(**h) for h in d.get("drum_hits", [])],
-            bass_notes=[BassNote(**n) for n in d.get("bass_notes", [])],
+            drum_hits=[DrumHit(**_fields_only(DrumHit, h)) for h in d.get("drum_hits", [])],
+            bass_notes=[BassNote(**_fields_only(BassNote, n)) for n in d.get("bass_notes", [])],
+            guitar_notes=[BassNote(**_fields_only(BassNote, n)) for n in d.get("guitar_notes", [])],
             tempo=d.get("tempo"),
             beats=list(d.get("beats", [])),
             downbeats=list(d.get("downbeats", [])),

@@ -80,13 +80,18 @@ def read_drum_hits(path: Path, default_velocity: int = 96) -> list[DrumHit]:
 
     Reads every drum-channel instrument; non-drum tracks are ignored.
     """
+    from .gm_drum_map import GM_TO_CANONICAL
+
     pm = _pretty_midi()
     midi = pm.PrettyMIDI(str(path))
     hits: list[DrumHit] = []
+    unknown: set[int] = set()
     for inst in midi.instruments:
         if not inst.is_drum:
             continue
         for note in inst.notes:
+            if note.pitch not in GM_TO_CANONICAL:
+                unknown.add(int(note.pitch))
             hits.append(
                 DrumHit(
                     time=float(note.start),
@@ -94,6 +99,11 @@ def read_drum_hits(path: Path, default_velocity: int = 96) -> list[DrumHit]:
                     velocity=int(note.velocity) or default_velocity,
                 )
             )
+    if unknown:
+        log.warning(
+            "Unmapped GM percussion pitch(es) %s in %s engraved on the snare line.",
+            ", ".join(map(str, sorted(unknown))), Path(path).name,
+        )
     hits.sort(key=lambda h: h.time)
     return hits
 

@@ -41,7 +41,7 @@ def test_sonify_empty_raises(tmp_path):
 def test_onset_csv(tmp_path):
     out = write_onset_csv(_hits(), tmp_path / "onsets.csv")
     lines = out.read_text().strip().splitlines()
-    assert lines[0] == "time,instrument,velocity"
+    assert lines[0] == "time_sec,instrument,velocity_midi"
     assert len(lines) == 1 + len(_hits())
     # Sorted by time; first data row is a t=0 hit.
     assert lines[1].startswith("0.0000,")
