@@ -87,7 +87,9 @@ def sonify_drums(hits: list[DrumHit], out_path: str | Path, sr: int = 44100, tai
     hits = clean
 
     duration = max_time + tail
-    n = int(duration * sr)
+    # A single hit at t=0 with tail=0 must not build a zero-length buffer
+    # (the final peak-normalize would crash on an empty array).
+    n = max(1, int(duration * sr))
     buf = np.zeros(n, dtype=np.float32)
     rng = np.random.default_rng(0)
 

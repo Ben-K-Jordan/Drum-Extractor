@@ -93,12 +93,14 @@ def _read_adtof_output(out_path: Path, drum_stem: Path, velocity: int) -> list[D
     candidates += sorted(out_path.parent.glob(f"{drum_stem.stem}*.mid"))
     candidates += sorted(out_path.parent.glob(f"{drum_stem.stem}*.txt"))
     seen = set()
+    empty_midi: str | None = None
     for p in candidates:
         rp = p.resolve()
         if rp in seen or not p.exists() or p.stat().st_size == 0:
             continue
         seen.add(rp)
-        if p.read_bytes()[:4] == b"MThd":  # standard MIDI header
+        is_midi = p.read_bytes()[:4] == b"MThd"  # standard MIDI header
+        if is_midi:
             hits = read_drum_hits(p, velocity)
         else:
             try:
@@ -107,11 +109,15 @@ def _read_adtof_output(out_path: Path, drum_stem: Path, velocity: int) -> list[D
                 continue
         if hits:
             return hits
-        if p.read_bytes()[:4] == b"MThd":
-            raise ExternalToolError(
-                f"ADTOF wrote a MIDI file ({p.name}) but it contains no drum-channel notes — "
-                "the model may have heard no drums in this stem."
-            )
+        if is_midi:
+            # Remember but keep scanning: a stale empty .mid must not shadow a
+            # sibling .txt that has the actual hits.
+            empty_midi = empty_midi or p.name
+    if empty_midi:
+        raise ExternalToolError(
+            f"ADTOF wrote a MIDI file ({empty_midi}) but it contains no drum-channel notes — "
+            "the model may have heard no drums in this stem."
+        )
     raise ExternalToolError("ADTOF ran but produced no recognizable output (.mid or time/pitch .txt).")
 
 
@@ -137,7 +143,13 @@ def _parse_onset_text(path: Path, velocity: int) -> list[DrumHit]:
         vel = velocity
         if len(parts) >= 3:
             try:
-                vel = int(max(1, min(127, float(parts[2]))))
+                v = float(parts[2])
+                # A 0..1 third column is a CONFIDENCE (the common ADT text
+                # format), not a velocity — clamping it up to 1 would render
+                # the whole transcription near-silent. Only 1 < v <= 127
+                # plausibly means MIDI velocity.
+                if 1.0 < v <= 127.0:
+                    vel = int(round(v))
             except ValueError:
                 pass
         from .gm_drum_map import ADT_5CLASS_TO_CANONICAL, CANONICAL_INSTRUMENTS
@@ -186,10 +198,13 @@ def _transcribe_onsets(drum_stem: Path, config: DrumTranscriptionConfig) -> list
         y = np.nan_to_num(y)
     # Silence gate: onset_detect peak-picks a NORMALIZED envelope and velocities
     # scale against the track's own p95, so noise-floor audio (a drumless song's
-    # 'drum' stem) would otherwise fabricate full-velocity phantom hits.
-    rms = float(np.sqrt(np.mean(y**2))) if y.size else 0.0
-    if rms < 10 ** (-60 / 20):  # -60 dBFS
-        log.warning("Drum stem is effectively silent (RMS %.1f dBFS); no hits.", -200.0 if rms == 0 else 20 * np.log10(rms))
+    # 'drum' stem) would otherwise fabricate full-velocity phantom hits. Gate on
+    # PEAK, not track RMS: drums are transient (RMS sits 20-25 dB below peak),
+    # and an RMS gate zeroed real recordings with peaks as high as -40 dBFS.
+    peak_amp = float(np.max(np.abs(y))) if y.size else 0.0
+    if peak_amp < 10 ** (-60 / 20):  # peak below -60 dBFS: nothing to hear
+        log.warning("Drum stem is effectively silent (peak %.1f dBFS); no hits.",
+                    -200.0 if peak_amp == 0 else 20 * np.log10(peak_amp))
         return []
     # Detect peaks WITHOUT backtracking first: the contrast gate below must see
     # the peak's envelope value, and backtracking rewinds to the local minimum.

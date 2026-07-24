@@ -61,30 +61,18 @@ def detect_kick_onsets(
     # n_fft=512: the default 2048 (46 ms) window makes every kick's envelope
     # fire TWICE ~50 ms apart, fabricating phantom 32nd-note double-kicks on
     # ordinary grooves. The short window still resolves 45 ms-gap real doubles.
+    # (No amplitude-based echo filtering here: real double-kick strokes are
+    # routinely ~6 dB softer than a neighboring accent, which is exactly what
+    # such a filter eats first — verified on accented-gallop fixtures.)
     env = librosa.onset.onset_strength(y=y_low, sr=sr, hop_length=hop, n_fft=512)
     wait = max(1, int((min_gap_ms / 1000.0) * sr / hop))
-    # Peaks first WITHOUT backtracking: the echo filter below needs each
-    # peak's envelope value, and backtracking rewinds to the local minimum.
     peaks = librosa.onset.onset_detect(
         onset_envelope=env, sr=sr, hop_length=hop, units="frames", backtrack=False,
         wait=wait, pre_max=wait, post_max=wait,
     )
     if len(peaks) == 0:
         return []
-    # Echo filter: a kick's decaying body can raise a secondary envelope bump
-    # 50-100 ms after the true attack — the same spacing as real fast
-    # double-kick, so time alone can't separate them. Magnitude can: real
-    # consecutive strokes have comparable envelope peaks, while the echo is a
-    # small fraction of its parent's.
-    echo_window = int(0.25 * sr / hop)
-    kept: list[int] = []
-    for p in peaks:
-        p = int(p)
-        recent = [env[q] for q in kept if p - q <= echo_window]
-        if recent and env[p] < 0.5 * max(recent):
-            continue
-        kept.append(p)
-    frames = librosa.onset.onset_backtrack(np.asarray(kept, dtype=int), env)
+    frames = librosa.onset.onset_backtrack(np.asarray(peaks, dtype=int), env)
     onsets = librosa.frames_to_time(frames, sr=sr, hop_length=hop)
     # Belt-and-braces: enforce the min gap on the final times (backtracking can
     # land two peaks closer together than the peak-picker's `wait` spacing).

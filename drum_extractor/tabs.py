@@ -123,10 +123,18 @@ def assign_frets(notes: list[BassNote], tuning: tuple[int, ...], frets: int) -> 
             in_range = in_range[len(in_range) - len(tuning):]
         voicings = _voicings([n.pitch for n in in_range], tuning, frets) if in_range else []
         # A cluster with no crossing-free voicing (semitone smears from
-        # distorted chords) must not sink the whole chord: shed the lowest
-        # note until a playable subset remains, same keep-the-melody policy.
+        # distorted chords) must not sink the whole chord. Shed ONE note at a
+        # time — whichever single removal restores a voicing, trying the
+        # lowest first (melody survives) — so an unvoiceable MIDDLE note
+        # can't force away more notes than necessary.
         while in_range and not voicings:
-            dropped.append(in_range.pop(0))
+            removal = 0
+            for i in range(len(in_range)):
+                trial = [n.pitch for j, n in enumerate(in_range) if j != i]
+                if trial and _voicings(trial, tuning, frets):
+                    removal = i
+                    break
+            dropped.append(in_range.pop(removal))
             if in_range:
                 voicings = _voicings([n.pitch for n in in_range], tuning, frets)
         unplaceable += len(dropped)
@@ -212,8 +220,9 @@ def render_ascii_tab(
     """Chord-aware ASCII tab, wrapped into multiple systems at ``width`` chars.
 
     Notes sounding together share one column; unplaceable notes render as 'x'
-    (one per note, on free strings from the bottom up) so the tab stays
-    count-consistent with the MIDI. ``title``/``tempo`` add a header block.
+    (one per note, on free strings from the bottom up — when every string in a
+    column already carries a fret, further x's have nowhere to draw and only
+    the MIDI keeps them). ``title``/``tempo`` add a header block.
     """
     names = string_names(tuning)
     label_w = max((len(n) for n in names), default=1)

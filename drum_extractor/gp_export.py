@@ -45,7 +45,10 @@ def write_gp5(
 
     bpm = float(tempo) if tempo and tempo > 0 else 120.0
     slot_s = 60.0 / bpm / SIXTEENTHS_PER_BEAT  # sixteenth length in seconds
-    slots_per_measure = max(1, beats_per_bar) * SIXTEENTHS_PER_BEAT
+    # Clamp ONCE and use everywhere: a raw beats_per_bar=0 would silently
+    # write an invalid 0/4 time signature while the grid used 1 beat.
+    beats_per_bar = max(1, int(beats_per_bar))
+    slots_per_measure = beats_per_bar * SIXTEENTHS_PER_BEAT
 
     song = gp.models.Song()
     song.title = title
