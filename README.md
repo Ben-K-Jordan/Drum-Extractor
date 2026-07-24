@@ -111,6 +111,8 @@ drum-extractor transcribe-drums stems/drums.wav
 drum-extractor notate output/song/transcription.json
 drum-extractor run song.mp3 --grid 32 --boost-double-kick   # fast-metal setup
 drum-extractor run song.mp3 --guitar                        # + guitar tabs (6-stem model)
+drum-extractor run song.mp3 --fixed-tempo 184 --grid-mode constant  # you know the BPM
+drum-extractor run song.mp3 --reuse-stems --drum-backend adtof      # re-transcribe, skip separation
 ```
 
 `output/<song>/` contains the stems, `drums.mid`, `bass.mid`, `bass.tab.txt`,
@@ -172,8 +174,8 @@ project's real source.
 ## Contributing / development
 
 ```bash
-./install.sh --light          # everything except the heavy ML separation stack
-.venv/bin/pytest -q           # 90+ tests, no GPU or model downloads needed
+./install.sh --light          # no torch/TF stacks: drums, notation, web, gp5
+.venv/bin/pytest -q           # 150 tests, no GPU or model downloads needed
 ```
 
 Issues and PRs welcome — especially real-world reports of where transcription

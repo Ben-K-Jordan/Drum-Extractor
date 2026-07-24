@@ -28,6 +28,12 @@ RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pyt
     && (pip install --no-cache-dir -e ".[adtof]" || echo "ADTOF skipped; onset fallback will be used") \
     && rm -rf /root/.cache
 
+# Bake the Demucs weights in (~320 MB): without this the FIRST song uploaded
+# to a fresh container stalls for minutes on a silent model download. Worth
+# the image size for a tool whose pitch is "docker run and drop a song in".
+RUN python -c "from demucs.pretrained import get_model; get_model('htdemucs_ft')" \
+    || echo "weights pre-download failed; they will download on first use"
+
 EXPOSE 8237
 VOLUME ["/app/output"]
 

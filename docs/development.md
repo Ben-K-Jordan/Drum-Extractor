@@ -50,6 +50,24 @@ vacuously. The shipped fix: realistic synthesis voices, a dominance-based
 classifier, and thresholds grid-searched **under hard constraints from held-out
 realistic proxies** with a safety margin.
 
+### Round 5 — full-application audit (38 confirmed defects)
+Five parallel auditors attacked every module with reproduced-before-reported
+findings, then the fixes themselves went through an adversarial verification
+pass. Highlights:
+- **Every .gp5 ignored the song's tempo** — tabs/GP files were written before
+  beat tracking, so they were always quantized on a 120 BPM grid.
+- **Accents vanished from chords** (music21 exports only chord-level
+  articulations) — an accented snare under a hi-hat lost its accent.
+- **Filenames could inject JavaScript into the mixer** (backtick/`${}` in a
+  Jinja-interpolated template literal), and a short first stem wedged playback
+  before the song's end.
+- The kick booster's 46 ms analysis window **double-fired on every kick**,
+  fabricating the phantom double-kicks it exists to fix.
+- Drumless audio (noise-floor stems, sustained tones) produced full-velocity
+  phantom charts; unvoiceable chords vanished wholesale from tabs; a hit a few
+  ms before the first downbeat shifted every bar number in constant-grid mode.
+Regression suite: `tests/test_full_audit.py`, one test per confirmed fix.
+
 ## The ground-truth groove bank
 
 `drum-extractor bank-build` generates grooves programmatically (rock 8ths,
