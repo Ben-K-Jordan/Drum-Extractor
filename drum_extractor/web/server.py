@@ -18,6 +18,7 @@ job's own results — nothing is resolved from user-supplied paths.
 
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 import uuid
@@ -78,6 +79,8 @@ class Job:
                 downloads["midi"] = {"url": f"/download/{self.id}/midi", "label": "Drum MIDI"}
             if self.result.bass_tab:
                 downloads["tab"] = {"url": f"/download/{self.id}/tab", "label": "Bass tab"}
+            if self.result.bass_midi:
+                downloads["bmidi"] = {"url": f"/download/{self.id}/bmidi", "label": "Bass MIDI"}
             if self.result.bass_gp:
                 downloads["gpb"] = {"url": f"/download/{self.id}/gpb", "label": "Bass tab (.gp5)"}
             if self.result.guitar_tab:
@@ -308,7 +311,11 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
         try:
             file.save(str(audio_path))
         except OSError as exc:
-            return jsonify({"error": f"Could not save the upload: {exc.strerror or exc}"}), 400
+            # Don't leave a zombie 'queued' job whose mixer page spins forever.
+            job.state = "error"
+            job.error = f"Could not save the upload: {exc.strerror or exc}"
+            shutil.rmtree(upload_dir, ignore_errors=True)
+            return jsonify({"error": job.error}), 400
 
         want_guitar = request.form.get("guitar") in ("1", "true", "on")
         try:
@@ -372,6 +379,7 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
             "sheet": r.pdf or r.musicxml,
             "midi": r.drum_midi,
             "tab": r.bass_tab,
+            "bmidi": r.bass_midi,
             "gtab": r.guitar_tab,
             "gmidi": r.guitar_midi,
             "gpb": r.bass_gp,

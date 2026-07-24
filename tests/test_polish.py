@@ -44,13 +44,17 @@ def test_cli_run_end_to_end_with_reused_stems(tmp_path, capsys):
     assert "<work-title>song</work-title>" in (tmp_path / "out" / "song" / "drums.musicxml").read_text()
 
 
-def test_cli_missing_input_is_a_one_liner(tmp_path, caplog):
-    from drum_extractor.cli import main
+def test_cli_missing_input_is_a_one_liner(tmp_path, monkeypatch):
+    # Recorder instead of caplog/capsys: configure_logging() binds the handler
+    # to whichever stderr existed at the FIRST cli.main() call in the process,
+    # so stream-capture assertions here are test-order dependent.
+    from drum_extractor import cli
 
-    with caplog.at_level("ERROR"):
-        rc = main(["run", str(tmp_path / "nope.mp3"), "-o", str(tmp_path / "out")])
+    messages: list[str] = []
+    monkeypatch.setattr(cli.log, "error", lambda msg, *a: messages.append(msg % a if a else str(msg)))
+    rc = cli.main(["run", str(tmp_path / "nope.mp3"), "-o", str(tmp_path / "out")])
     assert rc == 1
-    assert any("Input audio not found" in r.message for r in caplog.records)
+    assert any("Input audio not found" in m for m in messages)
 
 
 def test_doctor_fix_hints_name_real_extras():

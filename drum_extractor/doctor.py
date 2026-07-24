@@ -29,12 +29,35 @@ class Check:
 
 
 def _probe_import(module: str) -> tuple[bool, str]:
+    """Really import (find_spec would miss broken installs), but quietly:
+    TF banners and deprecation warnings would otherwise bury the report."""
+    import contextlib
+    import io
+    import warnings
+
     try:
-        mod = __import__(module)
-        version = getattr(mod, "__version__", "")
-        return True, str(version)
+        with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            warnings.simplefilter("ignore")
+            __import__(module)
+        return True, _version_of(module)
     except Exception as exc:  # ImportError or any init failure
         return False, type(exc).__name__
+
+
+def _version_of(module: str) -> str:
+    """Installed version via package metadata (many modules lack __version__)."""
+    from importlib import metadata
+
+    dist_names = {"basic_pitch": "basic-pitch", "guitarpro": "PyGuitarPro"}
+    for name in (dist_names.get(module, module), module.replace("_", "-")):
+        try:
+            return metadata.version(name)
+        except metadata.PackageNotFoundError:
+            continue
+    import sys as _sys
+
+    return str(getattr(_sys.modules.get(module), "__version__", ""))
 
 
 def _probe_cmd(*names: str) -> str | None:

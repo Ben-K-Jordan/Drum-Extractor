@@ -93,8 +93,14 @@ def run_pipeline(
     # Sheet music titled after the song, unless the caller set an explicit title.
     from .config import NotationConfig as _NC
 
-    if config.notation.title == _NC.title:
-        config.notation.title = song_title
+    # Effective notation config, computed WITHOUT mutating the caller's
+    # config: a PipelineConfig reused for a second song must not carry the
+    # first song's title into the second song's sheet.
+    import dataclasses as _dc
+
+    notation_config = config.notation
+    if notation_config.title == _NC.title:
+        notation_config = _dc.replace(notation_config, title=song_title)
 
     # A rerun with a stage now disabled must not leave that stage's previous
     # outputs lying around contradicting the fresh transcription.json.
@@ -154,17 +160,32 @@ def run_pipeline(
     elif config.do_drum_transcription:
         result.warnings.append("drum transcription: no drum stem available")
 
+    # Track which string stages RAN SUCCESSFULLY: stale-output removal for an
+    # empty result must never fire on a stage that errored — a transient
+    # failure must not destroy the previous run's good files.
+    stage_ok = {"bass": False, "guitar": False}
+
     # --- Stage 2b: bass transcription ---
     if config.do_bass_transcription and result.stems.bass:
         notify("transcribing bass")
-        _try(result, "bass transcription", lambda: _do_bass(result, config, song_dir))
+
+        def _bass_stage() -> None:
+            _do_bass(result, config, song_dir)
+            stage_ok["bass"] = True
+
+        _try(result, "bass transcription", _bass_stage)
     elif config.do_bass_transcription:
         result.warnings.append("bass transcription: no bass stem available")
 
     # --- Optional: guitar transcription (needs the 6-stem model's guitar stem) ---
     if config.do_guitar_transcription and result.stems.guitar:
         notify("transcribing guitar")
-        _try(result, "guitar transcription", lambda: _do_guitar(result, config, song_dir))
+
+        def _guitar_stage() -> None:
+            _do_guitar(result, config, song_dir)
+            stage_ok["guitar"] = True
+
+        _try(result, "guitar transcription", _guitar_stage)
     elif config.do_guitar_transcription:
         result.warnings.append("guitar transcription: no guitar stem available (needs htdemucs_6s)")
 
@@ -183,15 +204,18 @@ def run_pipeline(
     )
 
     # --- Tabs + Guitar Pro files, AFTER quantization so they carry the real
-    # tempo: written earlier they'd be built on the 120 BPM default grid. ---
+    # tempo: written earlier they'd be built on the 120 BPM default grid.
+    # Runs even with zero notes so a successful-but-empty rerun cleans up
+    # now-contradicting files from a previous run. ---
     if result.transcription.bass_notes or result.transcription.guitar_notes:
         notify("writing tabs")
-        _try(result, "tab rendering", lambda: _do_string_outputs(result, config, song_dir, song_title))
+    _try(result, "tab rendering",
+         lambda: _do_string_outputs(result, config, song_dir, song_title, stage_ok))
 
     # --- Stage 4: notation ---
     if config.do_notation and result.transcription.drum_hits:
         notify("engraving sheet music")
-        _try(result, "notation", lambda: _do_notation(result, config, song_dir))
+        _try(result, "notation", lambda: _do_notation(result, config, song_dir, notation_config))
 
     # --- Phase 4: correction aids (sonification + onset CSV) ---
     if config.do_sonify and result.transcription.drum_hits:
@@ -250,8 +274,14 @@ def _do_guitar(result: PipelineResult, config: PipelineConfig, song_dir: Path) -
     result.transcription.guitar_notes = transcribe_guitar(result.stems.guitar, config.guitar)
 
 
-def _do_string_outputs(result: PipelineResult, config: PipelineConfig, song_dir: Path, title: str) -> None:
-    """Write bass/guitar MIDI + ASCII tab + .gp5, tempo-aware."""
+def _do_string_outputs(result: PipelineResult, config: PipelineConfig, song_dir: Path,
+                       title: str, stage_ok: dict[str, bool]) -> None:
+    """Write bass/guitar MIDI + ASCII tab + .gp5, tempo-aware.
+
+    Stale files from a previous run are removed only when the stage RAN
+    SUCCESSFULLY and legitimately produced nothing — an errored stage must
+    leave the previous outputs alone.
+    """
     from .midi_io import write_bass_midi
     from .tabs import render_ascii_tab
 
@@ -267,7 +297,7 @@ def _do_string_outputs(result: PipelineResult, config: PipelineConfig, song_dir:
         result.bass_tab = tab_path
         result.bass_gp = _maybe_gp(bass_notes, config.bass.tuning, song_dir / "bass.gp5",
                                    tempo, title, "Bass", 33, bpb)
-    else:
+    elif stage_ok["bass"]:
         _remove_stale(song_dir, "bass.mid", "bass.tab.txt", "bass.gp5")
 
     guitar_notes = result.transcription.guitar_notes
@@ -281,7 +311,7 @@ def _do_string_outputs(result: PipelineResult, config: PipelineConfig, song_dir:
         result.guitar_tab = tab_path
         result.guitar_gp = _maybe_gp(guitar_notes, config.guitar.tuning, song_dir / "guitar.gp5",
                                      tempo, title, "Guitar", 30, bpb)
-    elif config.do_guitar_transcription:
+    elif stage_ok["guitar"]:
         _remove_stale(song_dir, "guitar.mid", "guitar.tab.txt", "guitar.gp5")
 
 
@@ -321,13 +351,13 @@ def _do_quantize(result: PipelineResult, config: PipelineConfig, ref_audio: Path
         write_drum_midi(result.transcription.drum_hits, result.drum_midi, result.transcription.tempo)
 
 
-def _do_notation(result: PipelineResult, config: PipelineConfig, song_dir: Path) -> None:
+def _do_notation(result: PipelineResult, config: PipelineConfig, song_dir: Path, notation_config) -> None:
     from .notation import notate_drums
 
-    out = notate_drums(result.transcription, song_dir, config.notation, config.quantize)
+    out = notate_drums(result.transcription, song_dir, notation_config, config.quantize)
     result.musicxml = out.get("musicxml")
     result.pdf = out.get("pdf")
-    if config.notation.render_pdf and result.pdf is None:
+    if notation_config.render_pdf and result.pdf is None:
         # Otherwise the skip is only a mid-run stderr line, invisible in the
         # final summary.
         result.warnings.append(

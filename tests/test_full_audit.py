@@ -537,6 +537,82 @@ def test_rerun_without_bass_removes_stale_bass_outputs(tmp_path):
         assert not (song_dir / stale).exists(), f"stale {stale} survived a --no-bass rerun"
 
 
+def test_visible_rests_in_exported_musicxml(tmp_path):
+    """Verification-round regression: the unhide-rests pass must run on the
+    EXPORTED file — music21 injects print-object='no' rests during export."""
+    pytest.importorskip("music21")
+    from drum_extractor.notation import transcription_to_musicxml
+
+    tr = Transcription(drum_hits=[DrumHit(0.0, "snare", 100, bar=1, beat=1.0)], tempo=120.0)
+    xml = transcription_to_musicxml(tr, tmp_path / "r.musicxml", NotationConfig(), QuantizeConfig()).read_text()
+    assert 'print-object="no"' not in xml, "hidden padding rests leaked into the sheet"
+
+
+def test_reused_config_does_not_leak_title_between_songs(tmp_path):
+    pytest.importorskip("librosa")
+    pytest.importorskip("music21")
+    from drum_extractor.pipeline import run_pipeline
+
+    config = PipelineConfig(
+        output_dir=tmp_path / "out",
+        drums=DrumTranscriptionConfig(backend="onset"),
+        do_separation=False, do_bass_transcription=False,
+        do_quantize=False, do_sonify=False,
+    )
+    config.notation.render_pdf = False
+    for song in ("alpha", "beta"):
+        _stub_stem(tmp_path / "out" / song / "stems" / "drums.wav")
+        run_pipeline(tmp_path / f"{song}.wav", config)
+    beta_xml = (tmp_path / "out" / "beta" / "drums.musicxml").read_text()
+    assert "<work-title>beta</work-title>" in beta_xml, "first song's title leaked into the second"
+
+
+def test_failed_bass_stage_preserves_previous_outputs(tmp_path, monkeypatch):
+    """Verification-round regression: a transient bass failure must not delete
+    the previous run's good bass files."""
+    pytest.importorskip("librosa")
+    import drum_extractor.pipeline as pl
+
+    song_dir = tmp_path / "out" / "song"
+    _stub_stem(song_dir / "stems" / "drums.wav")
+    (song_dir / "stems" / "bass.wav").write_bytes(b"RIFFxxxx")
+    for old in ("bass.mid", "bass.tab.txt"):
+        (song_dir / old).write_bytes(b"good old output")
+
+    def boom(*a, **k):
+        raise RuntimeError("model download blocked")
+
+    monkeypatch.setattr(pl, "_do_bass", boom)
+    config = PipelineConfig(
+        output_dir=tmp_path / "out",
+        drums=DrumTranscriptionConfig(backend="onset"),
+        do_separation=False, do_quantize=False, do_notation=False, do_sonify=False,
+    )
+    result = pl.run_pipeline(tmp_path / "song.wav", config)
+    assert any("bass transcription" in w for w in result.warnings)
+    for old in ("bass.mid", "bass.tab.txt"):
+        assert (song_dir / old).exists(), f"failed stage destroyed previous {old}"
+
+
+def test_successful_empty_rerun_cleans_stale_outputs(tmp_path, monkeypatch):
+    pytest.importorskip("librosa")
+    import drum_extractor.pipeline as pl
+
+    song_dir = tmp_path / "out" / "song"
+    _stub_stem(song_dir / "stems" / "drums.wav")
+    (song_dir / "stems" / "bass.wav").write_bytes(b"RIFFxxxx")
+    (song_dir / "bass.tab.txt").write_bytes(b"stale")
+
+    monkeypatch.setattr(pl, "_do_bass", lambda result, config, song_dir: None)  # ran fine, found nothing
+    config = PipelineConfig(
+        output_dir=tmp_path / "out",
+        drums=DrumTranscriptionConfig(backend="onset"),
+        do_separation=False, do_quantize=False, do_notation=False, do_sonify=False,
+    )
+    pl.run_pipeline(tmp_path / "song.wav", config)
+    assert not (song_dir / "bass.tab.txt").exists(), "stale tab survived a successful empty rerun"
+
+
 def test_summary_lists_transcription_json_and_pdf_skip_warning(tmp_path, monkeypatch):
     pytest.importorskip("librosa")
     pytest.importorskip("music21")

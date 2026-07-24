@@ -246,7 +246,23 @@ def _cmd_transcribe_bass(args) -> int:
     out_tab.parent.mkdir(parents=True, exist_ok=True)
     out_tab.write_text(render_ascii_tab(notes, config, title=stem) + "\n")
     print(f"{len(notes)} notes -> {out_mid}\ntab -> {out_tab}")
+    gp = _maybe_gp5(notes, config.tuning, Path(args.output) / f"{stem}.gp5", stem, "Bass", 33)
+    if gp:
+        print(f"gp5 -> {gp}")
     return 0
+
+
+def _maybe_gp5(notes, tuning, path: Path, title: str, track_name: str, instrument: int) -> Path | None:
+    """Standalone-command parity with the pipeline: write .gp5 when possible."""
+    from .gp_export import gp_available, write_gp5
+
+    if not notes or not gp_available():
+        return None
+    try:
+        return write_gp5(notes, tuning, path, title=title, track_name=track_name, instrument=instrument)
+    except Exception as exc:
+        log.warning("Guitar Pro export skipped (%s)", exc)
+        return None
 
 
 def _cmd_doctor(args) -> int:
@@ -288,6 +304,9 @@ def _cmd_transcribe_guitar(args) -> int:
     out_tab.parent.mkdir(parents=True, exist_ok=True)
     out_tab.write_text(render_guitar_tab(notes, config, title=stem) + "\n")
     print(f"{len(notes)} notes -> {out_mid}\ntab -> {out_tab}")
+    gp = _maybe_gp5(notes, config.tuning, Path(args.output) / f"{stem}.gp5", stem, "Guitar", 30)
+    if gp:
+        print(f"gp5 -> {gp}")
     return 0
 
 

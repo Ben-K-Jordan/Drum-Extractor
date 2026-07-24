@@ -182,12 +182,6 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
         score.makeMeasures(inPlace=True)
         score.makeRests(fillGaps=True, inPlace=True)
         _renumber_voices(score)
-        # makeRests marks trailing padding rests hidden (print-object="no"),
-        # so a bar could show a rest on beat 2 but blank space on beat 4.
-        # Standard drum engraving shows every counted beat.
-        for rest in score.recurse().getElementsByClass("Rest"):
-            if rest.style.hideObjectOnPrint:
-                rest.style.hideObjectOnPrint = False
     except Exception as exc:  # pragma: no cover - music21 can be picky on messy input
         log.warning("makeMeasures/makeRests warning: %s", exc)
     return score
@@ -216,8 +210,33 @@ def transcription_to_musicxml(transcription: Transcription, out_path: str | Path
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     score.write("musicxml", fp=str(out_path))
+    _unhide_rests(out_path)
     log.info("Wrote MusicXML: %s", out_path)
     return out_path
+
+
+def _unhide_rests(musicxml_path: Path) -> None:
+    """Make every padding rest visible in the written MusicXML.
+
+    music21's EXPORT-side makeNotation marks trailing padding rests
+    ``print-object="no"``, so a bar could show a rest on beat 2 but blank
+    space on beat 4. Standard drum engraving shows every counted beat. This
+    must post-process the file — the hidden rests do not exist yet on the
+    Score object that build_score returns.
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        tree = ET.parse(musicxml_path)
+        changed = False
+        for note in tree.getroot().iter("note"):
+            if note.get("print-object") == "no" and note.find("rest") is not None:
+                del note.attrib["print-object"]
+                changed = True
+        if changed:
+            tree.write(musicxml_path, encoding="utf-8", xml_declaration=True)
+    except ET.ParseError as exc:  # never fail notation over a cosmetic pass
+        log.warning("Could not post-process rests in %s: %s", musicxml_path.name, exc)
 
 
 # Common MuseScore executable names across platforms/packagings. doctor and
