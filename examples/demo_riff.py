@@ -82,18 +82,30 @@ def render_stem(kind: str, octave_up: bool = False):
 
 
 def drum_hits():
+    """The published main-groove pattern (per standard drum transcriptions):
+    straight-8th hats (crash pulse in the 'chorus' half), backbeat snare on
+    2 and 4, kick on 1 — and the signature 16th figure around beat 3: kick on
+    3, ghost snare on the 'e', double kick on the '& a'. Bars 4/8 end with the
+    16th-snare pickup into the next phrase."""
     hits = []
     for bar in range(BARS):
         b0 = bar * BAR
-        if bar % 4 == 0:
-            hits.append(DrumHit(b0, "crash", 118))
+        chorus = bar >= BARS // 2
+        # 8th-note pulse: hats in the first half, crash-ride wash in the second.
+        pulse = "crash" if chorus else "hihat_closed"
         for e in range(8):
-            hits.append(DrumHit(b0 + e * EIGHTH, "hihat_closed", 96 if e % 2 == 0 else 72))
-        hits += [DrumHit(b0, "kick", 112), DrumHit(b0 + 1.75 * BEAT, "kick", 100),
-                 DrumHit(b0 + 2.5 * BEAT, "kick", 108),
-                 DrumHit(b0 + BEAT, "snare", 114), DrumHit(b0 + 3 * BEAT, "snare", 114)]
-        if bar % 4 == 3:  # snare fill into the next phrase
-            hits += [DrumHit(b0 + 3.5 * BEAT + k * EIGHTH / 2, "snare", 70 + 12 * k) for k in range(4)]
+            vel = 104 if e % 2 == 0 else 84
+            hits.append(DrumHit(b0 + e * EIGHTH, pulse, vel if chorus else vel - 8))
+        # Kick: 1, then the beat-3 cluster (3, 3&, 3a).
+        for beat in (0.0, 2.0, 2.5, 2.75):
+            hits.append(DrumHit(b0 + beat * BEAT, "kick", 112))
+        # Snare: backbeat on 2 and 4, ghost 16th on the 'e' of 3.
+        hits += [DrumHit(b0 + BEAT, "snare", 118),
+                 DrumHit(b0 + 2.25 * BEAT, "snare", 42),
+                 DrumHit(b0 + 3 * BEAT, "snare", 118)]
+        if bar % 4 == 3 and bar != BARS - 1:  # 16th-snare pickup into the next phrase
+            hits += [DrumHit(b0 + 3.5 * BEAT, "snare", 96),
+                     DrumHit(b0 + 3.75 * BEAT, "snare", 104)]
     return sorted(hits, key=lambda h: h.time)
 
 
@@ -116,7 +128,7 @@ def main() -> None:
     mix = 0.85 * mix / (np.max(np.abs(mix)) + 1e-9)
     sf.write(str(OUT / f"{SONG}.wav"), mix.astype("float32"), SR)
 
-    from drum_extractor.config import DrumTranscriptionConfig, PipelineConfig, QuantizeConfig
+    from drum_extractor.config import DrumTranscriptionConfig, NotationConfig, PipelineConfig, QuantizeConfig
     from drum_extractor.pipeline import run_pipeline
 
     config = PipelineConfig(
@@ -125,6 +137,26 @@ def main() -> None:
         quantize=QuantizeConfig(backend="librosa", fixed_tempo=BPM, grid_mode="constant"),
         do_separation=False,
     )
+    # Engrave the demo's GROUND-TRUTH chart first (we know the exact hits we
+    # synthesized — same trick as the accuracy bank's reference charts). The
+    # pipeline's drums.musicxml is the TRANSCRIBER's take, which is honest but
+    # rougher; reference.musicxml is what the groove actually is.
+    try:
+        from drum_extractor.events import Transcription
+        from drum_extractor.notation import notate_drums
+        from drum_extractor.quantize import quantize as _quantize
+
+        truth = Transcription(drum_hits=drum_hits(), tempo=BPM)
+        _quantize(truth, OUT / SONG / "stems" / "drums.wav",
+                  QuantizeConfig(backend="librosa", fixed_tempo=BPM, grid_mode="constant"))
+        notate_drums(truth, OUT / SONG,
+                     NotationConfig(title=f"{SONG} — groove chart", render_pdf=False),
+                     QuantizeConfig())
+        (OUT / SONG / "drums.musicxml").replace(OUT / SONG / "reference.musicxml")
+        print(f"ground-truth chart: {OUT / SONG / 'reference.musicxml'}")
+    except Exception as exc:  # notation extra missing — the demo still works
+        print(f"(reference chart skipped: {exc})")
+
     result = run_pipeline(OUT / f"{SONG}.wav", config)
     print(result.summary())
     print(f"\nfull mix to drop on the web UI: {OUT / f'{SONG}.wav'}")
