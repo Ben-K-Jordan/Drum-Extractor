@@ -537,6 +537,22 @@ def test_rerun_without_bass_removes_stale_bass_outputs(tmp_path):
         assert not (song_dir / stale).exists(), f"stale {stale} survived a --no-bass rerun"
 
 
+def test_kick_never_gets_ghost_or_accent_markings(tmp_path):
+    """Per standard drum-key convention (ghosts are a snare/tom device,
+    accents belong on the hands): a quiet kick must NOT engrave parenthesized
+    and a loud kick must NOT carry an accent mark."""
+    pytest.importorskip("music21")
+    from drum_extractor.notation import transcription_to_musicxml
+
+    tr = Transcription(drum_hits=[
+        DrumHit(0.0, "kick", velocity=30, bar=1, beat=0.0),    # quiet kick
+        DrumHit(0.0, "kick", velocity=127, bar=1, beat=2.0),   # slammed kick
+    ], tempo=120.0)
+    xml = transcription_to_musicxml(tr, tmp_path / "k.musicxml", NotationConfig(), QuantizeConfig()).read_text()
+    assert 'parentheses="yes"' not in xml, "ghost-note parentheses on a bass drum"
+    assert "<accent" not in xml, "accent mark on a bass drum"
+
+
 def test_drum_part_abbreviation_is_not_perc(tmp_path):
     """Continuation systems print the part ABBREVIATION: music21's generic
     Percussion says 'Perc', which made system 2+ look like a separate

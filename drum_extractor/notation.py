@@ -18,7 +18,7 @@ from pathlib import Path
 from .config import NotationConfig, QuantizeConfig
 from .errors import ExternalToolError, MissingDependencyError
 from .events import Transcription
-from .gm_drum_map import PLACEMENT, SNARE
+from .gm_drum_map import FAMILY, PLACEMENT, SNARE
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -155,11 +155,14 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
             u.notehead = place.notehead
             u.stemDirection = place.stem
             u.volume.velocity = hit.velocity
-            # Dynamics are half the groove: quiet hits engrave as ghost notes
-            # (parenthesized), loud ones get an accent mark.
-            if hit.velocity <= GHOST_VELOCITY:
+            # Dynamics are half the groove — but marked per standard drum-key
+            # conventions: ghost notes (parenthesized heads) are a SNARE/tom
+            # device, and accents belong on the hands. The bass drum never
+            # takes ghost parentheses or per-note accent marks on a chart.
+            family = FAMILY.get(hit.instrument, "other")
+            if hit.velocity <= GHOST_VELOCITY and family in ("snare", "toms"):
                 u.noteheadParenthesis = True
-            elif hit.velocity >= ACCENT_VELOCITY:
+            elif hit.velocity >= ACCENT_VELOCITY and place.voice == 1:
                 u.articulations.append(articulations.Accent())
             elements.append((u, place))
 
