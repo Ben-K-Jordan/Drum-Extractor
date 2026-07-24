@@ -10,6 +10,10 @@
 
 set -euo pipefail
 
+# Everything below is relative to the repo root, so the script must work when
+# invoked from anywhere (e.g. `bash /path/to/repo/install.sh`).
+cd "$(dirname "$0")"
+
 MODE="full"
 VENV=".venv"
 for arg in "$@"; do
@@ -20,6 +24,9 @@ for arg in "$@"; do
          echo "unknown option: $arg (use --light, --venv DIR)"; exit 2; fi ;;
   esac
 done
+if [ "${shift_venv:-}" = 1 ]; then
+  echo "--venv needs a directory argument"; exit 2
+fi
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m  ! %s\033[0m\n' "$*"; }
@@ -45,8 +52,8 @@ say "Upgrading pip"
 
 # --- main install -----------------------------------------------------------
 if [ "$MODE" = "light" ]; then
-  say "Installing (light: no ML separation stack)"
-  "$PIP" install -e ".[drums,notation,web]"
+  say "Installing (light: no ML separation stack — no torch/demucs/basic-pitch)"
+  "$PIP" install -e ".[drums,notation,web,gp]"
 else
   say "Installing (full — torch/demucs are large; the first download takes a while)"
   "$PIP" install -e ".[all]"
@@ -77,10 +84,15 @@ fi
 
 # --- double-clickable launchers ----------------------------------------------
 say "Creating launchers"
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(pwd)"
+# An absolute --venv path must not be glued onto ROOT.
+case "$VENV" in
+  /*) LAUNCH="$VENV" ;;
+  *)  LAUNCH="$ROOT/$VENV" ;;
+esac
 cat > run.sh <<EOF
 #!/usr/bin/env bash
-exec "$ROOT/$VENV/bin/drum-extractor" web "\$@"
+exec "$LAUNCH/bin/drum-extractor" web "\$@"
 EOF
 chmod +x run.sh
 echo "  ./run.sh"

@@ -73,8 +73,14 @@ async function send(file) {
   if (document.getElementById('guitar').checked) form.append('guitar', '1');
   try {
     const res = await fetch('/upload', { method: 'POST', body: form });
+    if (!res.ok) {
+      // Error bodies aren't always our JSON (413 too-large, proxies, 500s
+      // render HTML) — fall back to the HTTP status instead of a parse error.
+      let msg = null;
+      try { msg = (await res.json()).error; } catch (e) { /* not JSON */ }
+      throw new Error(msg || (res.status === 413 ? 'file too large' : `server error (${res.status} ${res.statusText})`));
+    }
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || res.statusText);
     window.location = data.mixer;
   } catch (err) {
     status.classList.add('error');

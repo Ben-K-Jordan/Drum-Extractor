@@ -1,11 +1,20 @@
 @echo off
 REM Drum Extractor installer for Windows.
-REM Run from the repo folder:  install.bat
+REM Double-click it, or run from the repo folder:  install.bat
 REM (Windows equivalent of install.sh; if anything fails, follow the manual
 REM  steps in the README.)
 
+REM Work from the repo root no matter where this was launched from.
+cd /d "%~dp0"
+
 where py >nul 2>nul
 if %errorlevel%==0 (set PY=py -3) else (set PY=python)
+
+%PY% -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" 2>nul
+if errorlevel 1 (
+  echo Python 3.10+ is required. Install it from https://python.org and re-run.
+  goto :fail
+)
 
 echo ==^> Creating virtualenv at .venv
 %PY% -m venv .venv || goto :fail
@@ -33,4 +42,6 @@ goto :eof
 
 :fail
 echo Install failed - see the message above, or follow the manual steps in the README.
+REM Keep the window open when this was double-clicked, so the error is readable.
+pause
 exit /b 1

@@ -16,12 +16,10 @@ DIR="${DRUMX_DIR:-$HOME/drum-extractor}"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
-for tool in git curl; do
-  if ! command -v "$tool" >/dev/null 2>&1 && [ "$tool" = git ]; then
-    echo "git is required. Install it (macOS: xcode-select --install; Debian/Ubuntu: sudo apt install git) and re-run."
-    exit 1
-  fi
-done
+if ! command -v git >/dev/null 2>&1; then
+  echo "git is required. Install it (macOS: xcode-select --install; Debian/Ubuntu: sudo apt install git) and re-run."
+  exit 1
+fi
 
 if [ -d "$DIR/.git" ]; then
   say "Updating existing install at $DIR"
@@ -39,5 +37,7 @@ if [ "${DRUMX_NO_LAUNCH:-0}" = 1 ]; then
   say "Installed. Start any time with: $DIR/run.sh"
 else
   say "Launching Drum Extractor (Ctrl+C to stop; restart later with $DIR/run.sh)"
-  exec "$DIR/.venv/bin/drum-extractor" web
+  # run.sh is written by install.sh and points at the right venv even when
+  # DRUMX_INSTALL_ARGS moved it with --venv.
+  exec "$DIR/run.sh"
 fi

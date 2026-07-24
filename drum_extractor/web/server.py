@@ -301,10 +301,14 @@ def create_app(config_factory=None, output_dir: str | Path = "output", sync: boo
         job = store.create(title=Path(file.filename).stem)
         upload_dir = output_dir / "jobs" / job.id
         upload_dir.mkdir(parents=True, exist_ok=True)
-        # Server-controlled filename: keep only the sanitized stem + suffix.
-        safe_stem = "".join(c for c in Path(file.filename).stem if c.isalnum() or c in "-_ ").strip() or "song"
+        # Server-controlled filename: keep only the sanitized stem + suffix,
+        # capped well under the 255-byte filesystem limit.
+        safe_stem = "".join(c for c in Path(file.filename).stem if c.isalnum() or c in "-_ ").strip()[:120] or "song"
         audio_path = upload_dir / f"{safe_stem}{suffix}"
-        file.save(str(audio_path))
+        try:
+            file.save(str(audio_path))
+        except OSError as exc:
+            return jsonify({"error": f"Could not save the upload: {exc.strerror or exc}"}), 400
 
         want_guitar = request.form.get("guitar") in ("1", "true", "on")
         try:

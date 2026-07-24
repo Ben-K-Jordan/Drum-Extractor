@@ -123,6 +123,9 @@
 
 <script>
 const JOB = {{ job_id | tojson }};
+// tojson keeps arbitrary song titles inert inside this script: HTML autoescape
+// does NOT neutralize backticks/${} in JS template-literal context.
+const TITLE = {{ title | tojson }};
 // 'other' is everything-but-drums/bass/vocals on the 4-stem model, but once a
 // dedicated guitar stem exists it's genuinely "other".
 function niceName(name, stems) {
@@ -133,7 +136,8 @@ function niceName(name, stems) {
 
 const state = {
   ctx: null, master: null,
-  stems: [],          // {name, el, gainNode, buffer, fader, muted, solo}
+  stems: [],          // {name, el, url, gainNode, buffer, fader, muted, solo}
+  masterIdx: 0,       // index of the LONGEST stem: timing master + end detection
   duration: 0,
   playing: false,
   loopA: null, loopB: null,
@@ -178,15 +182,24 @@ async function loadStems(job) {
   for (const name of Object.keys(job.stems)) {
     const ab = await fetch(job.stems[name]).then(r => r.arrayBuffer());
     const buffer = await state.ctx.decodeAudioData(ab.slice(0));
-    const el = new Audio(URL.createObjectURL(new Blob([ab], { type: 'audio/wav' })));
+    const url = URL.createObjectURL(new Blob([ab], { type: 'audio/wav' }));
+    const el = new Audio(url);
     el.preload = 'auto';
     el.preservesPitch = true;
     const srcNode = state.ctx.createMediaElementSource(el);
     const gainNode = state.ctx.createGain();
     srcNode.connect(gainNode).connect(state.master);
-    state.stems.push({ name, el, gainNode, buffer, fader: 1.0, muted: false, solo: false });
-    state.duration = Math.max(state.duration, buffer.duration);
+    state.stems.push({ name, el, url, gainNode, buffer, fader: 1.0, muted: false, solo: false });
+    // The longest stem drives the clock: a shorter master would end early,
+    // freeze currentTime, and wedge playback before the song is over.
+    if (buffer.duration > state.duration) {
+      state.duration = buffer.duration;
+      state.masterIdx = state.stems.length - 1;
+    }
   }
+  window.addEventListener('pagehide', () => {
+    for (const s of state.stems) URL.revokeObjectURL(s.url);
+  }, { once: true });
   state.timing = job.timing || null;
   buildBoard(job);
   await buildSheet(job);
@@ -209,6 +222,7 @@ function drawHitStrip() {
   ctx.clearRect(0, 0, W, canvas.height);
   if (!hits.length || !state.duration) { canvas.style.display = 'none'; return; }
   for (const [t, fam] of hits) {
+    if (t > state.duration) continue;  // transcription can run slightly past the audio
     const x = Math.round((t / state.duration) * (W - 1));
     ctx.fillStyle = FAMILY_COLORS[fam] || FAMILY_COLORS.other;
     // family decides the lane so kick/snare/cymbal patterns are readable
@@ -342,7 +356,7 @@ function effectiveGain(s) {
 function applyGains() { for (const s of state.stems) s.gainNode.gain.value = effectiveGain(s); }
 
 // ---------- transport (element-based) ----------
-const masterEl = () => state.stems[0].el;
+const masterEl = () => state.stems[state.masterIdx].el;
 
 function play() {
   if (state.playing) { pause(); return; }
@@ -372,8 +386,10 @@ function tick() {
   const t = currentTime();
   // A-B loop
   if (state.loopB !== null && t >= state.loopB) { seekTo(state.loopA ?? 0); }
-  // keep the elements sample-close (they can drift a little at slow rates)
-  for (const s of state.stems.slice(1)) {
+  // keep the elements sample-close (they can drift a little at slow rates);
+  // stems shorter than the master have simply ended — leave them be
+  for (const s of state.stems) {
+    if (s.el === masterEl() || s.el.ended) continue;
     if (Math.abs(s.el.currentTime - masterEl().currentTime) > 0.06)
       s.el.currentTime = masterEl().currentTime;
   }
@@ -453,7 +469,7 @@ document.getElementById('dlmix').onclick = async () => {
     const blob = encodeWav(rendered);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `{{ title }}-custom-mix.wav`;
+    a.download = TITLE + '-custom-mix.wav';
     a.click();
     URL.revokeObjectURL(a.href);
   } finally {
