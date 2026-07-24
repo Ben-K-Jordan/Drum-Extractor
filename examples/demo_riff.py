@@ -82,30 +82,40 @@ def render_stem(kind: str, octave_up: bool = False):
 
 
 def drum_hits():
-    """The published main-groove pattern (per standard drum transcriptions):
-    straight-8th hats (crash pulse in the 'chorus' half), backbeat snare on
-    2 and 4, kick on 1 — and the signature 16th figure around beat 3: kick on
-    3, ghost snare on the 'e', double kick on the '& a'. Bars 4/8 end with the
-    16th-snare pickup into the next phrase."""
+    """The groove per the published transcription: straight-8th pulse (hats in
+    the first half, crash wash in the back half), the kick PAIR on 1 and the
+    '&' of 1 ('boom-boom... CHA'), syncopated kicks on the 'a' of 2 and the
+    '&' of 3, backbeat snare on 2 and 4 — and the flammed snare/kick/hat 16th
+    entrance fill leading into the crash half."""
     hits = []
+    fill_bar = BARS // 2 - 1  # the fill replaces beats 2-4 of this bar
     for bar in range(BARS):
         b0 = bar * BAR
         chorus = bar >= BARS // 2
-        # 8th-note pulse: hats in the first half, crash-ride wash in the second.
         pulse = "crash" if chorus else "hihat_closed"
+        if bar == fill_bar:
+            # Beat 1 still grooves...
+            hits += [DrumHit(b0, "hihat_closed", 100), DrumHit(b0 + 0.5 * BEAT, "hihat_closed", 84),
+                     DrumHit(b0, "kick", 112), DrumHit(b0 + 0.5 * BEAT, "kick", 106)]
+            # ...then the iconic entrance fill: [flam-snare, kick, hat, kick]
+            # per beat, three times, landing on the next bar's crash. (Flams
+            # render as accents — the notation stage has no flam glyph yet.)
+            six = BEAT / 4
+            for k in range(3):
+                base = b0 + (1 + k) * BEAT
+                hits += [DrumHit(base, "snare", 122),
+                         DrumHit(base + six, "kick", 104),
+                         DrumHit(base + 2 * six, "hihat_closed", 92),
+                         DrumHit(base + 3 * six, "kick", 104)]
+            continue
         for e in range(8):
-            vel = 104 if e % 2 == 0 else 84
-            hits.append(DrumHit(b0 + e * EIGHTH, pulse, vel if chorus else vel - 8))
-        # Kick: 1, then the beat-3 cluster (3, 3&, 3a).
-        for beat in (0.0, 2.0, 2.5, 2.75):
+            vel = 106 if e % 2 == 0 else 86
+            hits.append(DrumHit(b0 + e * EIGHTH, pulse, vel if chorus else vel - 10))
+        # Kick: the pair on 1 and '& of 1', then the 'a of 2' and '& of 3'.
+        for beat in (0.0, 0.5, 1.75, 2.5):
             hits.append(DrumHit(b0 + beat * BEAT, "kick", 112))
-        # Snare: backbeat on 2 and 4, ghost 16th on the 'e' of 3.
-        hits += [DrumHit(b0 + BEAT, "snare", 118),
-                 DrumHit(b0 + 2.25 * BEAT, "snare", 42),
-                 DrumHit(b0 + 3 * BEAT, "snare", 118)]
-        if bar % 4 == 3 and bar != BARS - 1:  # 16th-snare pickup into the next phrase
-            hits += [DrumHit(b0 + 3.5 * BEAT, "snare", 96),
-                     DrumHit(b0 + 3.75 * BEAT, "snare", 104)]
+        # Snare: backbeat on 2 and 4.
+        hits += [DrumHit(b0 + BEAT, "snare", 118), DrumHit(b0 + 3 * BEAT, "snare", 118)]
     return sorted(hits, key=lambda h: h.time)
 
 
