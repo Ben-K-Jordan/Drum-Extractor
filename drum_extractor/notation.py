@@ -79,7 +79,12 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
     part.insert(0, clef.PercussionClef())
     part.insert(0, meter.TimeSignature(f"{beats_per_bar}/{beat_unit}"))
     if transcription.tempo:
-        part.insert(0, m21tempo.MetronomeMark(number=round(transcription.tempo)))
+        # transcription.tempo is the BEAT-UNIT pulse rate (quantize tracks
+        # beats_per_bar pulses/bar), so the mark must reference that unit:
+        # 6/8 tracked at eighth=178 would otherwise print "quarter = 178".
+        part.insert(0, m21tempo.MetronomeMark(
+            number=round(transcription.tempo), referent=duration.Duration(4.0 / beat_unit)
+        ))
 
     # Group hits by (voice, snapped quarter-length offset).
     groups: dict[tuple[int, float], list] = defaultdict(list)
@@ -88,6 +93,17 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
         off = _offset_ql(hit, beats_per_bar, beat_unit, transcription.tempo)
         off = round(off / grid_ql) * grid_ql
         groups[(place.voice, off)].append(hit)
+
+    # Unquantized inputs (`notate file.mid`, backend='none') bypass
+    # quantize._dedupe_hits, so a flam/doubled hit would engrave as two
+    # identical noteheads on the same staff position. Keep the loudest.
+    for key, hit_list in groups.items():
+        best: dict[str, object] = {}
+        for h in hit_list:
+            prev = best.get(h.instrument)
+            if prev is None or h.velocity > prev.velocity:  # type: ignore[union-attr]
+                best[h.instrument] = h
+        groups[key] = list(best.values())
 
     # Integer voice ids export as MusicXML <voice>1</voice> / <voice>2</voice>,
     # which is what MuseScore expects for the hands/feet stem split.
@@ -148,6 +164,9 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
             chord = percussion.PercussionChord([e for e, _ in elements])
             chord.duration = duration.Duration(note_dur.quarterLength)
             chord.stemDirection = stem_dir
+            # music21 exports only the CHORD's articulations — accents left on
+            # member notes vanish (e.g. an accented snare under a hi-hat).
+            chord.articulations = [a for el, _ in elements for a in el.articulations]
             voices[voice_id].insert(off, chord)
         else:  # fallback: insert individually (may collide visually)
             for el, _ in elements:
@@ -163,6 +182,12 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
         score.makeMeasures(inPlace=True)
         score.makeRests(fillGaps=True, inPlace=True)
         _renumber_voices(score)
+        # makeRests marks trailing padding rests hidden (print-object="no"),
+        # so a bar could show a rest on beat 2 but blank space on beat 4.
+        # Standard drum engraving shows every counted beat.
+        for rest in score.recurse().getElementsByClass("Rest"):
+            if rest.style.hideObjectOnPrint:
+                rest.style.hideObjectOnPrint = False
     except Exception as exc:  # pragma: no cover - music21 can be picky on messy input
         log.warning("makeMeasures/makeRests warning: %s", exc)
     return score
@@ -195,9 +220,26 @@ def transcription_to_musicxml(transcription: Transcription, out_path: str | Path
     return out_path
 
 
+# Common MuseScore executable names across platforms/packagings. doctor and
+# render_pdf MUST resolve from the same list: probing more names than the
+# renderer uses meant doctor could report "ok" for a binary PDF export never
+# tried.
+MUSESCORE_CANDIDATES = ("mscore", "musescore", "musescore4", "mscore4portable", "MuseScore4.exe")
+
+
+def find_musescore(preferred: str | None = None) -> str | None:
+    """Resolve the MuseScore CLI: the configured name first, then common names."""
+    import shutil
+
+    for cand in ([preferred] if preferred else []) + list(MUSESCORE_CANDIDATES):
+        exe = shutil.which(cand)
+        if exe:
+            return exe
+    return None
+
+
 def render_pdf(musicxml_path: str | Path, pdf_path: str | Path, config: NotationConfig | None = None) -> Path:
     """Render MusicXML (or MIDI) to PDF via the MuseScore CLI."""
-    import shutil
     import subprocess
 
     config = config or NotationConfig()
@@ -205,13 +247,13 @@ def render_pdf(musicxml_path: str | Path, pdf_path: str | Path, config: Notation
     pdf_path = Path(pdf_path)
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
-    exe = shutil.which(config.musescore_command)
+    exe = find_musescore(config.musescore_command)
     if exe is None:
         raise ExternalToolError(
-            f"MuseScore CLI ('{config.musescore_command}') not found on PATH. "
-            "Install MuseScore 4 and/or set NotationConfig.musescore_command to its executable "
-            "(e.g. 'musescore4', or a full path). The MusicXML file was still written and can be "
-            "opened in any notation editor."
+            f"MuseScore CLI not found on PATH (tried '{config.musescore_command}' and "
+            f"{', '.join(MUSESCORE_CANDIDATES)}). Install MuseScore 4, or pass "
+            "--musescore-command / set NotationConfig.musescore_command to its executable. "
+            "The MusicXML file was still written and can be opened in any notation editor."
         )
     cmd = [exe, "-o", str(pdf_path), str(musicxml_path)]
     log.info("Rendering PDF: %s", " ".join(cmd))

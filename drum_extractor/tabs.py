@@ -99,20 +99,39 @@ def assign_frets(notes: list[BassNote], tuning: tuple[int, ...], frets: int) -> 
     playable_chords: list[tuple[list[BassNote], list[list[tuple[int, int]]]]] = []
     for chord in chords:
         chord_sorted = sorted(chord, key=lambda n: n.pitch)
-        in_range = [n for n in chord_sorted if 0 <= n.pitch - tuning[0] and n.pitch - tuning[-1] <= frets]
-        dropped = [n for n in chord_sorted if n not in in_range]
+        in_range: list[BassNote] = []
+        dropped: list[BassNote] = []
+        for n in chord_sorted:
+            if 0 <= n.pitch - tuning[0] and n.pitch - tuning[-1] <= frets:
+                in_range.append(n)
+            else:
+                dropped.append(n)
+        # Duplicate pitches (basic-pitch re-strike jitter) can never sit on
+        # distinct strings without a crossing — keep one of each.
+        seen: set[int] = set()
+        uniq: list[BassNote] = []
+        for n in in_range:
+            if n.pitch in seen:
+                dropped.append(n)
+            else:
+                seen.add(n.pitch)
+                uniq.append(n)
+        in_range = uniq
         # More notes than strings: keep the highest ones (melody survives).
         if len(in_range) > len(tuning):
             dropped += in_range[: len(in_range) - len(tuning)]
             in_range = in_range[len(in_range) - len(tuning):]
+        voicings = _voicings([n.pitch for n in in_range], tuning, frets) if in_range else []
+        # A cluster with no crossing-free voicing (semitone smears from
+        # distorted chords) must not sink the whole chord: shed the lowest
+        # note until a playable subset remains, same keep-the-melody policy.
+        while in_range and not voicings:
+            dropped.append(in_range.pop(0))
+            if in_range:
+                voicings = _voicings([n.pitch for n in in_range], tuning, frets)
         unplaceable += len(dropped)
-        if not in_range:
-            continue
-        voicings = _voicings([n.pitch for n in in_range], tuning, frets)
-        if not voicings:
-            unplaceable += len(in_range)
-            continue
-        playable_chords.append((in_range, voicings))
+        if in_range:
+            playable_chords.append((in_range, voicings))
 
     if playable_chords:
         # DP over chords: state = chosen voicing (carrying its hand position).
@@ -149,23 +168,52 @@ def assign_frets(notes: list[BassNote], tuning: tuple[int, ...], frets: int) -> 
 
     if unplaceable:
         log.warning(
-            "%d note(s) fall outside the fretboard (tuning low=%d, %d frets, %d strings); "
+            "%d note(s) could not be placed (outside the fretboard, duplicated in a "
+            "chord, or an unvoiceable cluster; tuning low=%d, %d frets, %d strings); "
             "marked 'x' in the tab, true pitch kept in the MIDI.",
             unplaceable, tuning[0], frets, len(tuning),
         )
     return unplaceable
 
 
+# Tunings are conventionally spelled with flats (Eb standard, Db, drop Ab).
+_NOTE_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
+
+
 def string_names(tuning: tuple[int, ...]) -> list[str]:
-    names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-    return [names[p % 12] for p in tuning]
+    return [_NOTE_NAMES[p % 12] for p in tuning]
 
 
-def render_ascii_tab(notes: list[BassNote], tuning: tuple[int, ...], width: int = 76) -> str:
+def note_name(pitch: int) -> str:
+    """MIDI pitch -> name with octave (28 -> 'E1')."""
+    return f"{_NOTE_NAMES[pitch % 12]}{pitch // 12 - 1}"
+
+
+def tab_header(tuning: tuple[int, ...], title: str | None = None, tempo: float | None = None) -> str:
+    """Human-readable header for a tab file: song, tuning (with octaves), legend."""
+    lines = []
+    if title:
+        lines.append(f"== {title} ==")
+    info = f"tuning: {' '.join(note_name(p) for p in tuning)} (low to high)"
+    if tempo:
+        info += f"   tempo: ~{round(tempo)} BPM"
+    lines.append(info)
+    lines.append("x = note the transcriber heard but that doesn't fit the fretboard (kept in the MIDI)")
+    return "\n".join(lines)
+
+
+def render_ascii_tab(
+    notes: list[BassNote],
+    tuning: tuple[int, ...],
+    width: int = 76,
+    title: str | None = None,
+    tempo: float | None = None,
+) -> str:
     """Chord-aware ASCII tab, wrapped into multiple systems at ``width`` chars.
 
     Notes sounding together share one column; unplaceable notes render as 'x'
-    on the lowest string so the tab stays count-consistent with the MIDI.
+    (one per note, on free strings from the bottom up) so the tab stays
+    count-consistent with the MIDI. ``title``/``tempo`` add a header block.
     """
     names = string_names(tuning)
     label_w = max((len(n) for n in names), default=1)
@@ -173,11 +221,19 @@ def render_ascii_tab(notes: list[BassNote], tuning: tuple[int, ...], width: int 
     columns: list[dict[int, str]] = []
     for chord in group_chords(notes):
         col: dict[int, str] = {}
+        xs = 0
         for n in chord:
             if n.string is None or n.fret is None:
-                col.setdefault(0, "x")
+                xs += 1
             else:
                 col[n.string] = str(n.fret)
+        # One visible 'x' per unplaceable note, never overwriting a real fret.
+        for s in range(len(tuning)):
+            if xs == 0:
+                break
+            if s not in col:
+                col[s] = "x"
+                xs -= 1
         columns.append(col)
 
     # Wrap columns into systems.
@@ -196,6 +252,9 @@ def render_ascii_tab(notes: list[BassNote], tuning: tuple[int, ...], width: int 
         systems.append(current)
 
     lines: list[str] = []
+    if title or tempo:
+        lines.append(tab_header(tuning, title, tempo))
+        lines.append("")
     for si, system in enumerate(systems):
         if si:
             lines.append("")

@@ -48,6 +48,18 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--device", default="auto", help="auto|cpu|cuda|mps (default: auto)")
     run.add_argument("--shifts", type=int, default=1, help="Demucs shifts (higher = slower, slightly cleaner)")
     run.add_argument("--grid", type=int, default=16, help="Quantization grid 1/N (16=sixteenths, 32 for double-kick)")
+    run.add_argument("--grid-mode", default="tracked", choices=["tracked", "constant"],
+                     help="constant = uniform grid at one tempo (robust for steady-tempo songs)")
+    run.add_argument("--fixed-tempo", type=float, default=None, metavar="BPM",
+                     help="Constrain beat tracking to this known tempo")
+    run.add_argument("--min-bpm", type=float, default=None, help="Tempo search floor (metal preset: widen these)")
+    run.add_argument("--max-bpm", type=float, default=None, help="Tempo search ceiling")
+    run.add_argument("--title", default=None, help="Sheet-music title (default: the song's filename)")
+    run.add_argument("--no-pdf", action="store_true", help="Write MusicXML only, skip MuseScore PDF")
+    run.add_argument("--musescore-command", default=None, metavar="CMD",
+                     help="MuseScore executable for PDF export (default: auto-detect)")
+    run.add_argument("--reuse-stems", action="store_true",
+                     help="Skip separation and reuse stems from a previous run in the same output dir")
     run.add_argument("--drum-backend", default="adtof", choices=["adtof", "onset", "none"])
     run.add_argument("--no-bass", action="store_true", help="Skip bass transcription")
     run.add_argument("--no-quantize", action="store_true", help="Skip quantization")
@@ -81,6 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     td.add_argument("drum_stem", help="Isolated drum stem (wav/flac/mp3)")
     _add_common(td)
     td.add_argument("--backend", default="adtof", choices=["adtof", "onset", "none"])
+    td.add_argument("--boost-double-kick", action="store_true", help="Recover fast double-kick (metal)")
 
     # transcribe-bass — Stage 2b
     tb = sub.add_parser("transcribe-bass", help="Stage 2b: bass stem -> bass MIDI + tab")
@@ -133,11 +146,18 @@ def build_parser() -> argparse.ArgumentParser:
     nt.add_argument("--grid", type=int, default=16)
     nt.add_argument("--title", default="Drum Transcription")
     nt.add_argument("--no-pdf", action="store_true", help="Write MusicXML only, skip MuseScore PDF")
+    nt.add_argument("--musescore-command", default=None, metavar="CMD",
+                    help="MuseScore executable for PDF export (default: auto-detect)")
 
     return parser
 
 
 def _cmd_run(args) -> int:
+    notation_kwargs = {"render_pdf": not args.no_pdf}
+    if args.title:
+        notation_kwargs["title"] = args.title
+    if args.musescore_command:
+        notation_kwargs["musescore_command"] = args.musescore_command
     config = PipelineConfig(
         output_dir=Path(args.output),
         separation=SeparationConfig(
@@ -150,7 +170,15 @@ def _cmd_run(args) -> int:
         ),
         drums=DrumTranscriptionConfig(backend=args.drum_backend, boost_double_kick=args.boost_double_kick),
         bass=BassTranscriptionConfig(refine_with_crepe=args.crepe),
-        quantize=QuantizeConfig(grid=args.grid),
+        quantize=QuantizeConfig(
+            grid=args.grid,
+            grid_mode=args.grid_mode,
+            fixed_tempo=args.fixed_tempo,
+            min_bpm=args.min_bpm,
+            max_bpm=args.max_bpm,
+        ),
+        notation=NotationConfig(**notation_kwargs),
+        do_separation=not args.reuse_stems,
         do_bass_transcription=not args.no_bass,
         do_guitar_transcription=args.guitar,
         do_quantize=not args.no_quantize,
@@ -181,12 +209,24 @@ def _cmd_separate(args) -> int:
     return 0
 
 
+def _require_file(path_str: str, what: str) -> Path:
+    """Friendly up-front existence check: '[Errno 2]' is not an error message."""
+    p = Path(path_str)
+    if not p.is_file():
+        raise SystemExit(f"error: {what} not found: {p}")
+    return p
+
+
 def _cmd_transcribe_drums(args) -> int:
     from .drums import transcribe_drums
     from .midi_io import write_drum_midi
 
-    hits = transcribe_drums(args.drum_stem, DrumTranscriptionConfig(backend=args.backend))
-    out = Path(args.output) / f"{Path(args.drum_stem).stem}.mid"
+    stem_path = _require_file(args.drum_stem, "drum stem")
+    hits = transcribe_drums(
+        stem_path,
+        DrumTranscriptionConfig(backend=args.backend, boost_double_kick=args.boost_double_kick),
+    )
+    out = Path(args.output) / f"{stem_path.stem}.mid"
     write_drum_midi(hits, out)
     print(f"{len(hits)} hits -> {out}")
     return 0
@@ -196,14 +236,15 @@ def _cmd_transcribe_bass(args) -> int:
     from .bass import render_ascii_tab, transcribe_bass
     from .midi_io import write_bass_midi
 
+    stem_path = _require_file(args.bass_stem, "bass stem")
     config = BassTranscriptionConfig(refine_with_crepe=args.crepe)
-    notes = transcribe_bass(args.bass_stem, config)
-    stem = Path(args.bass_stem).stem
+    notes = transcribe_bass(stem_path, config)
+    stem = stem_path.stem
     out_mid = Path(args.output) / f"{stem}.mid"
     write_bass_midi(notes, out_mid)
     out_tab = Path(args.output) / f"{stem}.tab.txt"
     out_tab.parent.mkdir(parents=True, exist_ok=True)
-    out_tab.write_text(render_ascii_tab(notes, config))
+    out_tab.write_text(render_ascii_tab(notes, config, title=stem) + "\n")
     print(f"{len(notes)} notes -> {out_mid}\ntab -> {out_tab}")
     return 0
 
@@ -237,14 +278,15 @@ def _cmd_transcribe_guitar(args) -> int:
     from .guitar import render_guitar_tab, transcribe_guitar
     from .midi_io import write_bass_midi
 
+    stem_path = _require_file(args.guitar_stem, "guitar stem")
     config = GuitarTranscriptionConfig()
-    notes = transcribe_guitar(args.guitar_stem, config)
-    stem = Path(args.guitar_stem).stem
+    notes = transcribe_guitar(stem_path, config)
+    stem = stem_path.stem
     out_mid = Path(args.output) / f"{stem}.mid"
     write_bass_midi(notes, out_mid, program=30, name="Guitar")
     out_tab = Path(args.output) / f"{stem}.tab.txt"
     out_tab.parent.mkdir(parents=True, exist_ok=True)
-    out_tab.write_text(render_guitar_tab(notes, config))
+    out_tab.write_text(render_guitar_tab(notes, config, title=stem) + "\n")
     print(f"{len(notes)} notes -> {out_mid}\ntab -> {out_tab}")
     return 0
 
@@ -274,6 +316,22 @@ def _cmd_bank_eval(args) -> int:
     from .bank import evaluate_bank, format_report
     from .config import DrumTranscriptionConfig
 
+    if not Path(args.bank_dir).is_dir():
+        raise SystemExit(f"error: bank directory not found: {args.bank_dir} (build one with bank-build)")
+
+    # Provenance must record the backend that actually RAN: with ADTOF absent
+    # the transcriber silently falls back to onset detection per item, and a
+    # report labeled 'adtof' with onset-produced scores is worse than useless.
+    backend_used = args.backend
+    if args.backend == "adtof":
+        import shutil as _shutil
+
+        from .config import DrumTranscriptionConfig as _DTC
+
+        if _shutil.which(_DTC().adtof_command[0]) is None:
+            backend_used = "adtof (NOT INSTALLED — fell back to onset)"
+            log.warning("ADTOF is not on PATH; this evaluation will use the onset fallback.")
+
     report = evaluate_bank(
         args.bank_dir,
         DrumTranscriptionConfig(backend=args.backend, boost_double_kick=args.boost_double_kick),
@@ -284,7 +342,7 @@ def _cmd_bank_eval(args) -> int:
     import time as _time
 
     report["evaluated_with"] = {
-        "backend": args.backend,
+        "backend": backend_used,
         "boost_double_kick": args.boost_double_kick,
         "tolerance_ms": args.tolerance_ms,
         "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -301,17 +359,26 @@ def _cmd_notate(args) -> int:
     from .midi_io import read_drum_hits, read_drum_tempo
     from .notation import notate_drums
 
-    source = Path(args.source)
+    source = _require_file(args.source, "transcription source")
     if source.suffix == ".json":
-        transcription = Transcription.from_dict(json.loads(source.read_text()))
+        try:
+            transcription = Transcription.from_dict(json.loads(source.read_text()))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"error: {source} is not valid JSON ({exc})") from exc
     else:  # treat as a drum MIDI — carry its embedded tempo so note positions are correct
         transcription = Transcription(drum_hits=read_drum_hits(source), tempo=read_drum_tempo(source))
 
-    out_dir = Path(args.output) / source.stem
+    # 'transcription.json' as a stem would make every song overwrite the same
+    # output dir — use the parent song directory's name instead.
+    stem = source.stem if source.stem != "transcription" else (source.parent.name or source.stem)
+    out_dir = Path(args.output) / stem
+    notation_kwargs = {"title": args.title, "render_pdf": not args.no_pdf}
+    if args.musescore_command:
+        notation_kwargs["musescore_command"] = args.musescore_command
     results = notate_drums(
         transcription,
         out_dir,
-        NotationConfig(title=args.title, render_pdf=not args.no_pdf),
+        NotationConfig(**notation_kwargs),
         QuantizeConfig(grid=args.grid),
     )
     for name, path in results.items():
@@ -342,7 +409,10 @@ def main(argv: list[str] | None = None) -> int:
         print("Interrupted.", file=sys.stderr)
         return 130
     except Exception as exc:  # surface a clean message; --verbose for the traceback
-        log.error("%s", exc)
+        # Some library exceptions (audioread's NoBackendError) have EMPTY
+        # messages — never print a blank error line.
+        msg = str(exc).strip() or f"{type(exc).__name__} (run with --verbose for the traceback)"
+        log.error("%s", msg)
         if getattr(args, "verbose", False):
             raise
         return 1

@@ -98,6 +98,9 @@ def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote], min_frequ
     this also bounds 5-string low-B (30.9 Hz) detection — CREPE simply cannot
     see below its bottom bin.
     """
+    if not notes:
+        return notes  # nothing to refine; skip the (expensive) CREPE decode
+
     try:
         import numpy as np  # type: ignore
         import torch  # type: ignore
@@ -156,8 +159,14 @@ def assign_tab(notes: list[BassNote], config: BassTranscriptionConfig) -> None:
     assign_frets(notes, config.tuning, config.frets)
 
 
-def render_ascii_tab(notes: list[BassNote], config: BassTranscriptionConfig, columns: int = 80) -> str:
+def render_ascii_tab(
+    notes: list[BassNote],
+    config: BassTranscriptionConfig,
+    columns: int = 80,
+    title: str | None = None,
+    tempo: float | None = None,
+) -> str:
     """Render a chord-aware ASCII tab, wrapped into systems (see :mod:`tabs`)."""
     from .tabs import render_ascii_tab as _render
 
-    return _render(notes, config.tuning, width=columns)
+    return _render(notes, config.tuning, width=columns, title=title, tempo=tempo)

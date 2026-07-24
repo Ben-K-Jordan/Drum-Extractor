@@ -37,6 +37,7 @@ class PipelineResult:
     pdf: Path | None = None
     drum_sonification: Path | None = None
     onset_csv: Path | None = None
+    transcription_json: Path | None = None
     warnings: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -44,6 +45,7 @@ class PipelineResult:
         for label, value in [
             ("drums stem", self.stems.drums),
             ("bass stem", self.stems.bass),
+            ("guitar stem", self.stems.guitar),
             ("drum MIDI", self.drum_midi),
             ("bass MIDI", self.bass_midi),
             ("bass tab", self.bass_tab),
@@ -55,6 +57,7 @@ class PipelineResult:
             ("drum sheet PDF", self.pdf),
             ("drum sonified", self.drum_sonification),
             ("onset CSV", self.onset_csv),
+            ("transcription", self.transcription_json),
         ]:
             if value:
                 lines.append(f"  - {label:<14} {value}")
@@ -76,9 +79,35 @@ def run_pipeline(
     """
     config = config or PipelineConfig()
     audio_path = Path(audio_path)
-    song_dir = config.output_dir / audio_path.stem
+    if config.do_separation and not audio_path.exists():
+        from .errors import AudioLoadError
+
+        # Validate BEFORE mkdir so a typo'd filename doesn't litter the output
+        # tree with an empty directory.
+        raise AudioLoadError(f"Input audio not found: {audio_path}")
+    song_title = audio_path.stem
+    song_dir = config.output_dir / song_title
     song_dir.mkdir(parents=True, exist_ok=True)
     result = PipelineResult()
+
+    # Sheet music titled after the song, unless the caller set an explicit title.
+    from .config import NotationConfig as _NC
+
+    if config.notation.title == _NC.title:
+        config.notation.title = song_title
+
+    # A rerun with a stage now disabled must not leave that stage's previous
+    # outputs lying around contradicting the fresh transcription.json.
+    if not config.do_bass_transcription:
+        _remove_stale(song_dir, "bass.mid", "bass.tab.txt", "bass.gp5")
+    if not config.do_guitar_transcription:
+        _remove_stale(song_dir, "guitar.mid", "guitar.tab.txt", "guitar.gp5")
+    if not config.do_drum_transcription:
+        _remove_stale(song_dir, "drums.mid")
+    if not config.do_notation:
+        _remove_stale(song_dir, "drums.musicxml", "drums.pdf")
+    if not config.do_sonify:
+        _remove_stale(song_dir, "drums_sonified.wav", "drum_onsets.csv")
 
     def notify(stage: str) -> None:
         if on_stage:
@@ -115,6 +144,7 @@ def run_pipeline(
 
     # --- Phase 4: optional ensemble drum stem (cuts distorted-guitar bleed) ---
     if config.separation.ensemble_drums_model and result.stems.drums:
+        notify("ensembling drums")
         _try(result, "ensemble drums", lambda: _do_ensemble(result, config, audio_path, song_dir))
 
     # --- Stage 2a: drum transcription ---
@@ -148,7 +178,15 @@ def run_pipeline(
     # notation/sonify stages — so a late-stage failure can't discard the
     # expensive separation + transcription + quantization work (the IR can be
     # re-notated later via `drum-extractor notate transcription.json`).
-    _write_transcription_json(result.transcription, song_dir / "transcription.json")
+    result.transcription_json = _write_transcription_json(
+        result.transcription, song_dir / "transcription.json"
+    )
+
+    # --- Tabs + Guitar Pro files, AFTER quantization so they carry the real
+    # tempo: written earlier they'd be built on the 120 BPM default grid. ---
+    if result.transcription.bass_notes or result.transcription.guitar_notes:
+        notify("writing tabs")
+        _try(result, "tab rendering", lambda: _do_string_outputs(result, config, song_dir, song_title))
 
     # --- Stage 4: notation ---
     if config.do_notation and result.transcription.drum_hits:
@@ -160,7 +198,9 @@ def run_pipeline(
         notify("rendering correction aids")
         _try(result, "sonification", lambda: _do_sonify(result, song_dir))
 
-    log.info("\n%s", result.summary())
+    # debug, not info: the CLI prints summary() to stdout already, and a
+    # terminal user would otherwise see the whole block twice back-to-back.
+    log.debug("\n%s", result.summary())
     return result
 
 
@@ -197,37 +237,56 @@ def _do_drums(result: PipelineResult, config: PipelineConfig, song_dir: Path) ->
 
 
 def _do_bass(result: PipelineResult, config: PipelineConfig, song_dir: Path) -> None:
-    from .bass import render_ascii_tab, transcribe_bass
-    from .midi_io import write_bass_midi
+    from .bass import transcribe_bass
 
-    notes = transcribe_bass(result.stems.bass, config.bass)
-    result.transcription.bass_notes = notes
-    if notes:
-        result.bass_midi = write_bass_midi(notes, song_dir / "bass.mid", result.transcription.tempo)
-        tab_path = song_dir / "bass.tab.txt"
-        tab_path.write_text(render_ascii_tab(notes, config.bass))
-        result.bass_tab = tab_path
-        result.bass_gp = _maybe_gp(notes, config.bass.tuning, song_dir / "bass.gp5",
-                                   result.transcription.tempo, "Bass", 33)
+    # Tab/GP5/MIDI files are written after quantization (see
+    # _do_string_outputs) so they carry the song's real tempo.
+    result.transcription.bass_notes = transcribe_bass(result.stems.bass, config.bass)
 
 
 def _do_guitar(result: PipelineResult, config: PipelineConfig, song_dir: Path) -> None:
-    from .guitar import render_guitar_tab, transcribe_guitar
-    from .midi_io import write_bass_midi
+    from .guitar import transcribe_guitar
 
-    notes = transcribe_guitar(result.stems.guitar, config.guitar)
-    if notes:
+    result.transcription.guitar_notes = transcribe_guitar(result.stems.guitar, config.guitar)
+
+
+def _do_string_outputs(result: PipelineResult, config: PipelineConfig, song_dir: Path, title: str) -> None:
+    """Write bass/guitar MIDI + ASCII tab + .gp5, tempo-aware."""
+    from .midi_io import write_bass_midi
+    from .tabs import render_ascii_tab
+
+    tempo = result.transcription.tempo
+    bpb = config.quantize.beats_per_bar
+
+    bass_notes = result.transcription.bass_notes
+    if bass_notes:
+        result.bass_midi = write_bass_midi(bass_notes, song_dir / "bass.mid", tempo)
+        tab_path = song_dir / "bass.tab.txt"
+        tab_path.write_text(render_ascii_tab(
+            bass_notes, config.bass.tuning, title=f"{title} — bass", tempo=tempo) + "\n")
+        result.bass_tab = tab_path
+        result.bass_gp = _maybe_gp(bass_notes, config.bass.tuning, song_dir / "bass.gp5",
+                                   tempo, title, "Bass", 33, bpb)
+    else:
+        _remove_stale(song_dir, "bass.mid", "bass.tab.txt", "bass.gp5")
+
+    guitar_notes = result.transcription.guitar_notes
+    if guitar_notes:
         result.guitar_midi = write_bass_midi(
-            notes, song_dir / "guitar.mid", result.transcription.tempo, program=30, name="Guitar"
+            guitar_notes, song_dir / "guitar.mid", tempo, program=30, name="Guitar"
         )
         tab_path = song_dir / "guitar.tab.txt"
-        tab_path.write_text(render_guitar_tab(notes, config.guitar))
+        tab_path.write_text(render_ascii_tab(
+            guitar_notes, config.guitar.tuning, title=f"{title} — guitar", tempo=tempo) + "\n")
         result.guitar_tab = tab_path
-        result.guitar_gp = _maybe_gp(notes, config.guitar.tuning, song_dir / "guitar.gp5",
-                                     result.transcription.tempo, "Guitar", 30)
+        result.guitar_gp = _maybe_gp(guitar_notes, config.guitar.tuning, song_dir / "guitar.gp5",
+                                     tempo, title, "Guitar", 30, bpb)
+    elif config.do_guitar_transcription:
+        _remove_stale(song_dir, "guitar.mid", "guitar.tab.txt", "guitar.gp5")
 
 
-def _maybe_gp(notes, tuning, path: Path, tempo, track_name: str, instrument: int) -> Path | None:
+def _maybe_gp(notes, tuning, path: Path, tempo, title: str, track_name: str,
+              instrument: int, beats_per_bar: int = 4) -> Path | None:
     """Write a .gp5 if PyGuitarPro is installed; quietly skip otherwise."""
     from .gp_export import gp_available, write_gp5
 
@@ -235,11 +294,20 @@ def _maybe_gp(notes, tuning, path: Path, tempo, track_name: str, instrument: int
         log.debug("PyGuitarPro not installed; skipping %s", path.name)
         return None
     try:
-        return write_gp5(notes, tuning, path, tempo=tempo, title=path.stem,
-                         track_name=track_name, instrument=instrument)
+        return write_gp5(notes, tuning, path, tempo=tempo, title=title,
+                         track_name=track_name, instrument=instrument,
+                         artist="drum-extractor transcription", beats_per_bar=beats_per_bar)
     except Exception as exc:  # optional nicety; never fail the stage over it
         log.warning("Guitar Pro export skipped (%s)", exc)
         return None
+
+
+def _remove_stale(song_dir: Path, *names: str) -> None:
+    for name in names:
+        p = song_dir / name
+        if p.exists():
+            log.info("Removing stale output from a previous run: %s", p.name)
+            p.unlink(missing_ok=True)
 
 
 def _do_quantize(result: PipelineResult, config: PipelineConfig, ref_audio: Path) -> None:
@@ -259,6 +327,13 @@ def _do_notation(result: PipelineResult, config: PipelineConfig, song_dir: Path)
     out = notate_drums(result.transcription, song_dir, config.notation, config.quantize)
     result.musicxml = out.get("musicxml")
     result.pdf = out.get("pdf")
+    if config.notation.render_pdf and result.pdf is None:
+        # Otherwise the skip is only a mid-run stderr line, invisible in the
+        # final summary.
+        result.warnings.append(
+            "notation: PDF skipped — MuseScore not found (the MusicXML was written; "
+            "install MuseScore 4 for PDF export)"
+        )
 
 
 def _do_ensemble(result: PipelineResult, config: PipelineConfig, audio_path: Path, song_dir: Path) -> None:
@@ -293,6 +368,7 @@ def _discover_existing_stems(stems_dir: Path) -> Stems:
     return stems
 
 
-def _write_transcription_json(transcription: Transcription, path: Path) -> None:
+def _write_transcription_json(transcription: Transcription, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(transcription.to_dict(), indent=2))
+    return path

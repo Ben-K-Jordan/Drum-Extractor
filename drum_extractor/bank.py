@@ -228,8 +228,12 @@ def build_bank(
     write_notation: bool = False,
 ) -> list[BankItem]:
     """Generate and render the groove bank. Returns the items written."""
-    from .midi_io import write_drum_midi
-    from .sonify import sonify_drums
+    if bars < 1:
+        raise ValueError(f"bars must be >= 1 (got {bars})")
+    if jitter_ms < 0:
+        raise ValueError(f"jitter-ms must be >= 0 (got {jitter_ms})")
+    if vel_jitter < 0:
+        raise ValueError(f"vel-jitter must be >= 0 (got {vel_jitter})")
 
     out_dir = Path(out_dir)
     names = presets or list(PRESETS)
@@ -242,32 +246,50 @@ def build_bank(
 
         item_dir = out_dir / name
         item_dir.mkdir(parents=True, exist_ok=True)
-        transcription = Transcription(drum_hits=truth, tempo=bpm, time_signature=(4, 4))
-        (item_dir / "reference.json").write_text(json.dumps(transcription.to_dict(), indent=2))
-        write_drum_midi(truth, item_dir / "reference.mid", tempo=bpm)
-        sonify_drums(truth, item_dir / "drums.wav")
-        if noise_snr_db is not None:
-            _add_noise(item_dir / "drums.wav", noise_snr_db, seed=seed)
-        if write_notation:
-            from .config import NotationConfig, QuantizeConfig
-            from .notation import notate_drums
+        try:
+            _write_bank_item(item_dir, name, truth, hits, bpm, bars, jitter_ms,
+                             vel_jitter, noise_snr_db, seed, write_notation)
+        except Exception:
+            # A half-written item (reference.json without drums.wav) poisons
+            # every later bank-eval of this directory — remove it on failure.
+            import shutil
 
-            # The pristine grid hits (exact bar/beat) are the reference chart.
-            ref = Transcription(drum_hits=hits, tempo=bpm, time_signature=(4, 4))
-            notate_drums(ref, item_dir, NotationConfig(title=f"Reference: {name}", render_pdf=False), QuantizeConfig())
-            # replace(), not rename(): overwrites an existing reference on re-build
-            # (rename raises FileExistsError on Windows).
-            (item_dir / "drums.musicxml").replace(item_dir / "reference.musicxml")
-        (item_dir / "meta.json").write_text(
-            json.dumps(
-                {"preset": name, "bpm": bpm, "bars": bars, "jitter_ms": jitter_ms,
-                 "vel_jitter": vel_jitter, "noise_snr_db": noise_snr_db, "seed": seed},
-                indent=2,
-            )
-        )
+            shutil.rmtree(item_dir, ignore_errors=True)
+            raise
         items.append(BankItem(name=name, path=item_dir, bpm=bpm, n_hits=len(truth)))
         log.info("Bank item %-18s %.0f BPM, %d hits -> %s", name, bpm, len(truth), item_dir)
     return items
+
+
+def _write_bank_item(item_dir: Path, name: str, truth, hits, bpm: float, bars: int,
+                     jitter_ms: float, vel_jitter: int, noise_snr_db: float | None,
+                     seed: int, write_notation: bool) -> None:
+    from .midi_io import write_drum_midi
+    from .sonify import sonify_drums
+
+    transcription = Transcription(drum_hits=truth, tempo=bpm, time_signature=(4, 4))
+    (item_dir / "reference.json").write_text(json.dumps(transcription.to_dict(), indent=2))
+    write_drum_midi(truth, item_dir / "reference.mid", tempo=bpm)
+    sonify_drums(truth, item_dir / "drums.wav")
+    if noise_snr_db is not None:
+        _add_noise(item_dir / "drums.wav", noise_snr_db, seed=seed)
+    if write_notation:
+        from .config import NotationConfig, QuantizeConfig
+        from .notation import notate_drums
+
+        # The pristine grid hits (exact bar/beat) are the reference chart.
+        ref = Transcription(drum_hits=hits, tempo=bpm, time_signature=(4, 4))
+        notate_drums(ref, item_dir, NotationConfig(title=f"Reference: {name}", render_pdf=False), QuantizeConfig())
+        # replace(), not rename(): overwrites an existing reference on re-build
+        # (rename raises FileExistsError on Windows).
+        (item_dir / "drums.musicxml").replace(item_dir / "reference.musicxml")
+    (item_dir / "meta.json").write_text(
+        json.dumps(
+            {"preset": name, "bpm": bpm, "bars": bars, "jitter_ms": jitter_ms,
+             "vel_jitter": vel_jitter, "noise_snr_db": noise_snr_db, "seed": seed},
+            indent=2,
+        )
+    )
 
 
 # --- Scoring --------------------------------------------------------------------------
@@ -355,6 +377,9 @@ def evaluate_bank(
     from .drums import transcribe_drums
 
     config = config or DrumTranscriptionConfig()
+    if tolerance <= 0:
+        raise ValueError(f"tolerance must be positive (got {tolerance*1000:.0f} ms) — "
+                         "a non-positive window matches nothing and scores everything 0")
     bank_dir = Path(bank_dir)
     item_dirs = sorted(d for d in bank_dir.iterdir() if (d / "reference.json").exists())
     if not item_dirs:
@@ -367,6 +392,13 @@ def evaluate_bank(
         est = transcribe_drums(d / "drums.wav", config)
         scores = score_hits(ref.drum_hits, est, tolerance)
         items[d.name] = {fam: s.to_dict() for fam, s in scores.items()}
+        # Carry the item's generation settings so the report reads standalone.
+        meta_path = d / "meta.json"
+        if meta_path.exists():
+            try:
+                items[d.name]["meta"] = json.loads(meta_path.read_text())
+            except (ValueError, OSError):
+                pass
         for fam, s in scores.items():
             if fam == "overall":
                 continue

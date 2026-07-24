@@ -47,9 +47,15 @@ def transcribe_guitar(guitar_stem: str | Path, config: GuitarTranscriptionConfig
     return notes
 
 
-def render_guitar_tab(notes: list[BassNote], config: GuitarTranscriptionConfig | None = None, width: int = 76) -> str:
+def render_guitar_tab(
+    notes: list[BassNote],
+    config: GuitarTranscriptionConfig | None = None,
+    width: int = 76,
+    title: str | None = None,
+    tempo: float | None = None,
+) -> str:
     """Chord-aware ASCII guitar tab (see :mod:`tabs`)."""
     from .tabs import render_ascii_tab
 
     config = config or GuitarTranscriptionConfig()
-    return render_ascii_tab(notes, config.tuning, width=width)
+    return render_ascii_tab(notes, config.tuning, width=width, title=title, tempo=tempo)

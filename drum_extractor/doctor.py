@@ -105,11 +105,23 @@ def run_doctor() -> list[Check]:
     # --- Stage 4: notation ---
     ok, v = _probe_import("music21")
     checks.append(Check("notation: music21", OK if ok else MISSING, v, 'pip install "drum-extractor[notation]"'))
-    mscore = _probe_cmd("mscore", "musescore", "musescore4", "mscore4portable")
+    # Resolve through the SAME lookup render_pdf uses, so doctor can never say
+    # "ok" for a MuseScore binary the renderer wouldn't find.
+    from .notation import find_musescore
+
+    mscore = find_musescore()
     checks.append(
         Check("notation: MuseScore (PDF export)", OK if mscore else INFO,
               mscore or "MusicXML still produced; PDF needs MuseScore",
               "install MuseScore 4 from musescore.org and put its CLI on PATH")
+    )
+
+    # --- Guitar Pro export ---
+    ok, v = _probe_import("guitarpro")
+    checks.append(
+        Check("tabs: PyGuitarPro (.gp5 export)", OK if ok else INFO,
+              v if ok else "ASCII tabs still produced; .gp5 needs PyGuitarPro",
+              'pip install "drum-extractor[gp]"')
     )
 
     # --- Web UI ---
