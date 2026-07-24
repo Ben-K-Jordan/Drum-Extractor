@@ -1,5 +1,21 @@
 # Examples
 
+### `demo_riff.py` — the README's demo song, end to end
+
+Synthesizes a rendition of the classic Smells-Like-Teen-Spirit-style
+four-power-chord riff as separated stems (using the repo's own drum
+synthesizer) and runs the real pipeline on it — bass transcription, drum
+transcription, quantization, sheet music, ASCII tab and `.gp5`:
+
+```bash
+pip install -e ".[drums,bass,notation,gp]"
+python examples/demo_riff.py
+```
+
+Everything lands in `examples/out/`, including a full-mix WAV you can drop
+onto the web UI to explore the mixer with a song that transcribes cleanly.
+No copyrighted audio involved — the whole thing is generated.
+
 ### `demo_notation.py` — verify the notation stage without any audio
 
 Builds a synthetic rock groove and engraves it, so you can confirm Stage 4 works

@@ -33,6 +33,9 @@ stems/
 *.musicxml
 *.pdf
 
+# Generated demo/example output (recreate with examples/demo_riff.py)
+examples/out/
+
 # Keep example placeholders if any are added intentionally
 !examples/**/*.md
 
