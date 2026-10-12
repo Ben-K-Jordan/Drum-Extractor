@@ -6,50 +6,104 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Drum Extractor</title>
 <style>
-  :root { --bg:#14161a; --panel:#1b1f27; --edge:#2c313c; --text:#e6e9ef; --dim:#8b93a3; --accent:#e05545; }
-  * { box-sizing:border-box; margin:0; }
-  body { background:#14161a; color:#e6e9ef; font:16px/1.5 system-ui,-apple-system,sans-serif;
-         min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2rem; padding:2rem; }
-  h1 { font-size:1.6rem; letter-spacing:.04em; }
-  h1 span { color:#e05545; }
-  .drop { width:min(560px,90vw); border:2px dashed #3a4150; border-radius:14px; background:#1b1f27;
-          padding:3.5rem 2rem; text-align:center; cursor:pointer; transition:border-color .15s, background .15s; }
-  .drop.hover { border-color:#e05545; background:#232937; }
-  .drop p { color:#8b93a3; margin-top:.6rem; font-size:.9rem; }
-  .drop strong { font-size:1.1rem; }
-  #file { display:none; }
-  #status { min-height:1.5rem; color:#8b93a3; }
-  #status.error { color:#ff7b6b; }
-  .opt { display:flex; gap:.5rem; align-items:center; color:#aeb6c4; font-size:.9rem; }
-  .opt input { accent-color:#e05545; width:1.05rem; height:1.05rem; }
-  .library { width:min(560px,90vw); }
-  .library h2 { font-size:.85rem; letter-spacing:.1em; color:#5c6474; text-transform:uppercase; margin-bottom:.5rem; }
-  .library a { display:block; color:#aeb6c4; text-decoration:none; padding:.45rem .7rem; border:1px solid #2c313c;
-               border-radius:7px; margin-bottom:.4rem; background:#1b1f27; }
-  .library a:hover { border-color:#e05545; color:#e6e9ef; }
-  .hint { color:#5c6474; font-size:.85rem; max-width:560px; text-align:center; }
+  /* Layout: one centered rack column on a dim stage — drop target, options, library. */
+  :root {
+    color-scheme: dark;
+    --plane:   #0d0d0d;   /* the stage */
+    --surface: #1a1a19;   /* rack panels */
+    --raised:  #242423;   /* controls on a panel */
+    --ink:     #f0efec;
+    --ink-2:   #c3c2b7;
+    --muted:   #898781;
+    --line:    #2c2c2a;   /* hairlines */
+    --accent:  #9085e9;   /* interactive accent */
+    --danger:  #e66767;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --plane:   #f9f9f7;
+      --surface: #fcfcfb;
+      --raised:  #f3f2ee;
+      --ink:     #0b0b0b;
+      --ink-2:   #52514e;
+      --muted:   #898781;
+      --line:    #e1e0d9;
+      --accent:  #6250d6;
+      --danger:  #d03b3b;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--plane); color: var(--ink);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+         justify-content: center; gap: 1.6rem; padding-block: 2.5rem; padding-inline: 1rem; }
+
+  h1 { font-size: 1.35rem; font-weight: 700; letter-spacing: .22em; text-transform: uppercase; }
+  h1 span { color: var(--accent); }
+  .tagline { color: var(--muted); font-size: .9rem; margin-top: -1rem; }
+
+  .drop { width: min(560px, 100%); border: 1px solid var(--line); border-radius: 16px;
+          background: var(--surface); padding: .6rem; cursor: pointer; }
+  .drop .well { border: 2px dashed var(--line); border-radius: 10px; padding: 3rem 1.5rem;
+                text-align: center; transition: border-color .15s, background .15s; }
+  .drop.hover .well { border-color: var(--accent); background: var(--raised); }
+  .drop strong { font-size: 1.12rem; }
+  .drop p { color: var(--muted); margin-top: .55rem; font-size: .88rem; }
+  .drop .formats { font-family: var(--mono); font-size: .76rem; letter-spacing: .02em; }
+  #file { display: none; }
+
+  .opt { display: flex; gap: .55rem; align-items: baseline; color: var(--ink-2); font-size: .9rem;
+         max-width: 560px; }
+  .opt input { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; translate: 0 2px; }
+  .opt .detail { color: var(--muted); }
+
+  #status { min-height: 1.5rem; color: var(--ink-2); font-size: .9rem; }
+  #status.error { color: var(--danger); }
+
+  .hint { color: var(--muted); font-size: .85rem; max-width: 34rem; text-align: center;
+          text-wrap: balance; }
+
+  .library { width: min(560px, 100%); display: flex; flex-direction: column; gap: .4rem; }
+  .library h2 { font-size: .72rem; letter-spacing: .14em; color: var(--muted);
+                text-transform: uppercase; font-weight: 600; margin-bottom: .15rem; }
+  .library a { display: flex; align-items: center; gap: .6rem; color: var(--ink-2);
+               text-decoration: none; padding: .55rem .75rem; border: 1px solid var(--line);
+               border-radius: 9px; background: var(--surface); }
+  .library a::before { content: "▸"; color: var(--accent); font-size: .8rem; }
+  .library a:hover, .library a:focus-visible { border-color: var(--accent); color: var(--ink); outline: none; }
+  .drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
 </head>
 <body>
-  <h1>DRUM<span>·</span>EXTRACTOR</h1>
+  <h1>Drum<span>·</span>Extractor</h1>
+  <p class="tagline">Pull the drums and bass out of a song, and learn them.</p>
 
-  <div class="drop" id="drop">
-    <strong>Drop a song or recording here</strong>
-    <p>or click to choose a file</p>
-    <p>{{ formats }}</p>
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a song to process">
+    <div class="well">
+      <strong>Drop a song here</strong>
+      <p>or click to choose a file</p>
+      <p class="formats">{{ formats }}</p>
+    </div>
   </div>
   <input type="file" id="file" accept="audio/*">
+
   <label class="opt">
     <input type="checkbox" id="guitar">
-    Also transcribe guitar &rarr; tabs <span style="color:#5c6474">(uses the 6-stem model; slower, adds Guitar &amp; Keys channels)</span>
+    <span>Also transcribe guitar to tabs
+      <span class="detail">(slower; adds Guitar and Keys channels)</span></span>
   </label>
+
   <div id="status"></div>
-  <p class="hint">Separation runs locally (Demucs). A full song takes roughly its own
-     length on CPU, much less with a GPU — you'll land on the mixer as soon as the stems are ready.</p>
+
+  <p class="hint">Everything runs on this computer; your audio never leaves it.
+     Separation takes about the length of the song on CPU, less on a GPU.
+     The mixer opens when the stems are ready.</p>
 
   {% if recent %}
   <div class="library">
-    <h2>Recent songs</h2>
+    <h2>Your songs</h2>
     {% for r in recent %}<a href="{{ r.mixer }}">{{ r.title }}</a>{% endfor %}
   </div>
   {% endif %}
@@ -60,6 +114,7 @@ const fileInput = document.getElementById('file');
 const status = document.getElementById('status');
 
 drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
 ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hover'); }));
 ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('hover'); }));
 drop.addEventListener('drop', e => { if (e.dataTransfer.files.length) send(e.dataTransfer.files[0]); });

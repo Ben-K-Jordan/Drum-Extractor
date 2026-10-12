@@ -6,71 +6,155 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }} — Drum Extractor</title>
 <style>
-  * { box-sizing:border-box; margin:0; }
-  body { background:#14161a; color:#e6e9ef; font:15px/1.5 system-ui,-apple-system,sans-serif;
-         min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:1.5rem; gap:1.2rem; }
-  header { width:min(860px,95vw); display:flex; justify-content:space-between; align-items:baseline; }
-  header h1 { font-size:1.1rem; letter-spacing:.03em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%; }
-  header a { color:#8b93a3; text-decoration:none; font-size:.85rem; }
-  header a:hover { color:#e6e9ef; }
+  /* Layout: a console rack in one centered column — channel strips, then the
+     transport rail with the hit window, then paper panels, then downloads. */
+  :root {
+    color-scheme: dark;
+    --plane:   #0d0d0d;   /* the stage */
+    --surface: #1a1a19;   /* rack panels */
+    --raised:  #242423;   /* controls on a panel */
+    --well:    #141413;   /* inset displays (hit window, tabs) */
+    --ink:     #f0efec;
+    --ink-2:   #c3c2b7;
+    --muted:   #898781;
+    --line:    #2c2c2a;   /* hairlines */
+    --accent:  #9085e9;   /* interactive accent */
+    --danger:  #e66767;
+    --mute-on: #d03b3b;   /* status: never reused as a series color */
+    --solo-on: #fab219;
+    --loop-on: #0ca30c;
+    --cap:     #e9e5da;   /* fader cap, cream like hardware */
+    /* Hit-window series (validated categorical set on the dark well — the
+       window stays dark glass in both themes, like a real meter bridge). */
+    --viz-kick:    #3987e5;
+    --viz-snare:   #d95926;
+    --viz-hihat:   #199e70;
+    --viz-toms:    #c98500;
+    --viz-cymbals: #d55181;
+    --viz-other:   #898781;
+    --paper:   #f6f2e8;   /* engraved sheet background (paper is paper) */
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --plane:   #f9f9f7;
+      --surface: #fcfcfb;
+      --raised:  #f3f2ee;
+      --well:    #141413;  /* the display window keeps its dark glass */
+      --ink:     #0b0b0b;
+      --ink-2:   #52514e;
+      --muted:   #898781;
+      --line:    #e1e0d9;
+      --accent:  #6250d6;
+      --danger:  #d03b3b;
+      --cap:     #3a3933;  /* dark cap on a light console */
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--plane); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+         padding-block: 1.5rem; padding-inline: 1rem; gap: 1.1rem; }
+  header { width: min(880px, 100%); display: flex; justify-content: space-between;
+           align-items: baseline; gap: 1rem; }
+  header h1 { font-size: 1.05rem; font-weight: 650; letter-spacing: .02em;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header a { color: var(--muted); text-decoration: none; font-size: .85rem; flex-shrink: 0; }
+  header a:hover { color: var(--ink); }
 
-  /* processing state */
-  #processing { display:flex; flex-direction:column; align-items:center; gap:1rem; margin-top:4rem; }
-  .spinner { width:44px; height:44px; border:4px solid #2c313c; border-top-color:#e05545; border-radius:50%;
-             animation:spin 1s linear infinite; }
-  @keyframes spin { to { transform:rotate(360deg); } }
-  #stage { color:#8b93a3; }
-  #procerror { color:#ff7b6b; max-width:520px; text-align:center; white-space:pre-wrap; }
-  #pbarwrap { width:min(420px,80vw); height:8px; background:#2c313c; border-radius:5px; overflow:hidden; display:none; }
-  #pbar { height:100%; width:0%; background:#e05545; transition:width .6s; }
+  /* ---- processing state ---- */
+  #processing { display: flex; flex-direction: column; align-items: center; gap: 1rem; margin-top: 4rem; }
+  .spinner { width: 44px; height: 44px; border: 4px solid var(--line); border-top-color: var(--accent);
+             border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.5s; } }
+  #stage { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  #procerror { color: var(--danger); max-width: 32rem; text-align: center; white-space: pre-wrap; }
+  #pbarwrap { width: min(420px, 80vw); height: 8px; background: var(--raised); border: 1px solid var(--line);
+              border-radius: 5px; overflow: hidden; display: none; }
+  #pbar { height: 100%; width: 0%; background: var(--accent); transition: width .6s; }
+  .prochint { color: var(--muted); font-size: .85rem; max-width: 30rem; text-align: center; }
 
-  /* console */
-  #console { display:none; flex-direction:column; gap:1.2rem; width:min(860px,95vw); }
-  .board { background:linear-gradient(#20242e,#191d25); border:1px solid #2c313c; border-radius:12px;
-           padding:1.2rem; display:flex; justify-content:center; gap:1rem; flex-wrap:wrap; }
-  .strip { width:108px; background:#161a21; border:1px solid #2c313c; border-radius:9px;
-           padding: .8rem .5rem; display:flex; flex-direction:column; align-items:center; gap:.55rem; }
-  .strip .name { font-size:.78rem; letter-spacing:.12em; color:#aeb6c4; text-transform:uppercase; }
-  .strip .master-name { color:#e05545; }
-  .fader { height:150px; display:flex; align-items:center; justify-content:center; }
-  .fader input { writing-mode: vertical-rl; direction: rtl; width:28px; height:150px; accent-color:#e05545; }
-  .db { font-variant-numeric:tabular-nums; font-size:.75rem; color:#8b93a3; min-height:1.1em; }
-  .btns { display:flex; gap:.4rem; }
-  .btns button { border:1px solid #3a4150; background:#20242e; color:#aeb6c4; font-size:.72rem;
-                 padding:.22rem .5rem; border-radius:5px; cursor:pointer; }
-  .btns button.on-mute { background:#8a2f24; border-color:#a63a2c; color:#fff; }
-  .btns button.on-solo { background:#8f7a1e; border-color:#ab9326; color:#fff; }
+  /* ---- the board ---- */
+  #console { display: none; flex-direction: column; gap: 1.1rem; width: min(880px, 100%); }
+  .board { background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+           padding: 1.1rem; display: flex; justify-content: center; gap: .9rem; flex-wrap: wrap; }
+  .strip { width: 104px; background: var(--raised); border: 1px solid var(--line); border-radius: 10px;
+           padding: .75rem .5rem .6rem; display: flex; flex-direction: column; align-items: center; gap: .5rem; }
+  .strip .name { font-size: .7rem; font-weight: 600; letter-spacing: .14em; color: var(--ink-2);
+                 text-transform: uppercase; }
+  .strip .master-name { color: var(--accent); }
+  /* dB rails: hairline ticks behind the fader, like a printed scale */
+  .fader { height: 150px; width: 100%; display: flex; align-items: center; justify-content: center;
+           background:
+             repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px 18.6px)
+             50% 4px / 36px calc(100% - 8px) no-repeat; }
+  .fader input { writing-mode: vertical-rl; direction: rtl; width: 28px; height: 150px;
+                 accent-color: var(--cap); background: transparent; }
+  .db { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: .74rem;
+        color: var(--muted); min-height: 1.1em; }
+  .btns { display: flex; gap: .4rem; }
+  .btns button { border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+                 font-size: .72rem; font-weight: 600; width: 1.9rem; padding: .22rem 0;
+                 border-radius: 5px; cursor: pointer; }
+  .btns button.on-mute { background: var(--mute-on); border-color: var(--mute-on); color: #fff; }
+  .btns button.on-solo { background: var(--solo-on); border-color: var(--solo-on); color: #1a1a19; }
 
-  .transport { display:flex; align-items:center; gap:.7rem; background:#191d25; border:1px solid #2c313c;
-               border-radius:10px; padding:.8rem 1rem; flex-wrap:wrap; }
-  .transport button { border:1px solid #3a4150; background:#20242e; color:#e6e9ef; font-size:1rem;
-                      width:44px; height:38px; border-radius:7px; cursor:pointer; }
-  .transport button.small { width:auto; font-size:.78rem; padding:0 .6rem; }
-  .transport button.on-loop { background:#20452a; border-color:#2f6a3d; }
-  .seekcol { flex:1; min-width:180px; display:flex; flex-direction:column; gap:2px; }
-  #hitstrip { width:100%; height:22px; background:#10131a; border-radius:4px; cursor:pointer; display:block; }
-  #seek { width:100%; accent-color:#e05545; }
-  #clock { font-variant-numeric:tabular-nums; color:#8b93a3; font-size:.85rem; min-width:6.5rem; text-align:right; }
-  #speed { background:#20242e; color:#e6e9ef; border:1px solid #3a4150; border-radius:6px; padding:.35rem .4rem; }
-  #loopinfo { color:#6fae7d; font-size:.78rem; min-width:7rem; font-variant-numeric:tabular-nums; }
+  /* ---- transport rail ---- */
+  .transport { display: flex; align-items: center; gap: .7rem; background: var(--surface);
+               border: 1px solid var(--line); border-radius: 12px; padding: .8rem 1rem; flex-wrap: wrap; }
+  .transport button { border: 1px solid var(--line); background: var(--raised); color: var(--ink);
+                      font-size: 1rem; width: 44px; height: 38px; border-radius: 7px; cursor: pointer; }
+  .transport button:hover { border-color: var(--accent); }
+  .transport button.small { width: auto; font-size: .78rem; padding: 0 .6rem; }
+  .transport button.on-loop { background: var(--loop-on); border-color: var(--loop-on); color: #fff; }
+  #speed { background: var(--raised); color: var(--ink); border: 1px solid var(--line);
+           border-radius: 6px; padding: .35rem .4rem; }
+  #loopinfo { color: var(--loop-on); font-size: .78rem; min-width: 7rem;
+              font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .seekcol { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 3px; }
+  #hitstrip { width: 100%; height: 34px; background: var(--well); border-radius: 5px;
+              border: 1px solid var(--line); cursor: pointer; display: block; }
+  #seek { width: 100%; accent-color: var(--accent); }
+  #hitlegend { display: flex; gap: .9rem; flex-wrap: wrap; align-items: baseline;
+               font-size: .7rem; color: var(--ink-2); min-height: 1em; }
+  #hitlegend .chip { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+                     margin-right: .3rem; translate: 0 1px; }
+  #hitlegend .note { margin-left: auto; color: var(--muted); }
+  #clock { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-2);
+           font-size: .85rem; min-width: 6.5rem; text-align: right; }
 
-  .downloads { display:flex; gap:.7rem; flex-wrap:wrap; }
-  .downloads a, .downloads button {
-      border:1px solid #3a4150; background:#20242e; color:#e6e9ef; text-decoration:none; font-size:.86rem;
-      padding:.55rem .9rem; border-radius:8px; cursor:pointer; display:inline-flex; gap:.45rem; align-items:center; }
-  .downloads a:hover, .downloads button:hover { border-color:#e05545; }
-  .downloads .primary { background:#e05545; border-color:#e05545; color:#fff; }
-  #warnings { color:#8f7a1e; font-size:.8rem; white-space:pre-wrap; }
-
-  details.sheet { background:#191d25; border:1px solid #2c313c; border-radius:10px; padding:.6rem 1rem; }
-  details.sheet summary { cursor:pointer; color:#aeb6c4; font-size:.9rem; padding:.3rem 0; }
-  #sheetbox { background:#f5f2ea; border-radius:8px; margin-top:.7rem; max-height:70vh; overflow:auto; padding:.7rem; }
-  #sheetbox svg { max-width:100%; height:auto; display:block; margin:0 auto .6rem; }
-  #sheetbox object { width:100%; height:65vh; border:0; }
+  /* ---- panels ---- */
+  details.sheet { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+                  padding: .6rem 1rem; }
+  details.sheet summary { cursor: pointer; color: var(--ink-2); font-size: .9rem; padding: .3rem 0; }
+  details.sheet summary:hover { color: var(--ink); }
+  #sheetbox { background: var(--paper); border-radius: 8px; margin-top: .7rem; max-height: 70vh;
+              overflow: auto; padding: .7rem; }
+  #sheetbox svg { max-width: 100%; height: auto; display: block; margin: 0 auto .6rem; }
+  #sheetbox object { width: 100%; height: 65vh; border: 0; }
   /* playback-synced measure highlight */
-  #sheetbox g.measure.cur :is(path, ellipse, rect, polygon, use) { fill:#c0392b; stroke:#c0392b; }
-  details.sheet pre { background:#10131a; border-radius:8px; margin-top:.7rem; max-height:50vh; overflow:auto;
-                      padding:.8rem 1rem; color:#c9d1de; font:12px/1.45 ui-monospace,Consolas,monospace; }
+  #sheetbox g.measure.cur :is(path, ellipse, rect, polygon, use) { fill: #6250d6; stroke: #6250d6; }
+  details.sheet pre { background: var(--well); border: 1px solid var(--line); border-radius: 8px;
+                      margin-top: .7rem; max-height: 50vh; overflow: auto; padding: .8rem 1rem;
+                      color: #c9d1de; font: 12px/1.45 var(--mono); }
+
+  /* ---- downloads ---- */
+  .dlhead { font-size: .72rem; letter-spacing: .14em; color: var(--muted); text-transform: uppercase;
+            font-weight: 600; margin-bottom: -.5rem; }
+  .downloads { display: flex; gap: .7rem; flex-wrap: wrap; }
+  .downloads a, .downloads button {
+      border: 1px solid var(--line); background: var(--raised); color: var(--ink);
+      text-decoration: none; font-size: .86rem; padding: .55rem .9rem; border-radius: 8px;
+      cursor: pointer; display: inline-flex; gap: .45rem; align-items: center; }
+  .downloads a:hover, .downloads button:hover { border-color: var(--accent); }
+  .downloads .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .downloads .primary:hover { filter: brightness(1.08); }
+  #warnings { color: var(--muted); font-size: .8rem; white-space: pre-wrap; }
+
+  :is(button, a, select, input, summary):focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -84,26 +168,28 @@
     <div id="stage">starting…</div>
     <div id="pbarwrap"><div id="pbar"></div></div>
     <div id="procerror"></div>
+    <p class="prochint">Runs once per song. Finished songs stay in your library.</p>
   </div>
 
   <div id="console">
     <div class="board" id="board"></div>
 
     <div class="transport">
-      <button id="play" title="play/pause">&#9654;</button>
-      <button id="stop" title="back to start">&#9632;</button>
-      <select id="speed" title="playback speed (pitch preserved)">
+      <button id="play" title="Play or pause (Space)">&#9654;</button>
+      <button id="stop" title="Back to the start">&#9632;</button>
+      <select id="speed" title="Playback speed; the pitch stays true">
         <option value="0.5">50%</option><option value="0.6">60%</option>
         <option value="0.7">70%</option><option value="0.75">75%</option>
         <option value="0.85">85%</option><option value="1" selected>100%</option>
       </select>
-      <button class="small" id="setA" title="loop start = now">A</button>
-      <button class="small" id="setB" title="loop end = now">B</button>
-      <button class="small" id="clearAB" title="clear loop">&times;</button>
+      <button class="small" id="setA" title="Mark the loop start here">A</button>
+      <button class="small" id="setB" title="Mark the loop end here">B</button>
+      <button class="small" id="clearAB" title="Clear the loop">&times;</button>
       <span id="loopinfo"></span>
       <div class="seekcol">
-        <canvas id="hitstrip" height="22" title="detected drum hits — click to jump"></canvas>
-        <input type="range" id="seek" min="0" max="1000" value="0">
+        <canvas id="hitstrip" height="34" title="Every detected drum hit. Click to jump there."></canvas>
+        <input type="range" id="seek" min="0" max="1000" value="0" title="Position">
+        <div id="hitlegend"></div>
       </div>
       <span id="clock">0:00 / 0:00</span>
     </div>
@@ -115,8 +201,9 @@
 
     <div id="tabpanels"></div>
 
+    <div class="dlhead">Downloads</div>
     <div class="downloads" id="downloads">
-      <button class="primary" id="dlmix">&#8681; Download mix (your levels)</button>
+      <button class="primary" id="dlmix">&#8681; Download mix at your levels</button>
     </div>
     <div id="warnings"></div>
   </div>
@@ -148,11 +235,11 @@ const state = {
 // ---------- job polling ----------
 async function poll() {
   const res = await fetch(`/job/${JOB}`);
-  if (!res.ok) { document.getElementById('stage').textContent = 'job not found'; return; }
+  if (!res.ok) { document.getElementById('stage').textContent = 'This song is not in the library.'; return; }
   const job = await res.json();
   if (job.state === 'error') {
     document.querySelector('.spinner').style.display = 'none';
-    document.getElementById('stage').textContent = 'failed';
+    document.getElementById('stage').textContent = 'Processing failed';
     document.getElementById('procerror').textContent = job.error || 'unknown error';
     return;
   }
@@ -210,8 +297,14 @@ async function loadStems(job) {
   drawHitStrip();
 }
 
-// ---------- hit markers (see the transcription against the audio) ----------
-const FAMILY_COLORS = { kick:'#e05545', snare:'#4aa3ff', hihat:'#d9c34a', toms:'#9a6bd0', cymbals:'#59c489', other:'#8b93a3' };
+// ---------- the hit window (the transcription against the audio) ----------
+// Colors come from the stylesheet tokens so chart and chrome stay one system.
+const FAMILIES = ['cymbals', 'hihat', 'toms', 'snare', 'kick'];   // top lane -> bottom, chart-order
+const FAMILY_LABELS = { kick:'Kick', snare:'Snare', hihat:'Hats', toms:'Toms', cymbals:'Cymbals', other:'Other' };
+function famColor(fam) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(`--viz-${fam}`).trim();
+  return v || getComputedStyle(document.documentElement).getPropertyValue('--viz-other').trim();
+}
 
 function drawHitStrip() {
   const canvas = document.getElementById('hitstrip');
@@ -220,16 +313,44 @@ function drawHitStrip() {
   canvas.width = W;  // match CSS pixels so markers line up with the seek bar
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, canvas.height);
-  if (!hits.length || !state.duration) { canvas.style.display = 'none'; return; }
+  if (!hits.length || !state.duration) {
+    canvas.style.display = 'none';
+    document.getElementById('hitlegend').style.display = 'none';
+    return;
+  }
+  // One lane per family, kick at the bottom like a drum chart; 5px marks
+  // with a clear gap between lanes so the patterns read at a glance.
+  const lane = { cymbals: 3, hihat: 9, toms: 15, snare: 21, kick: 27 };
+  const seen = new Set();
   for (const [t, fam] of hits) {
     if (t > state.duration) continue;  // transcription can run slightly past the audio
     const x = Math.round((t / state.duration) * (W - 1));
-    ctx.fillStyle = FAMILY_COLORS[fam] || FAMILY_COLORS.other;
-    // family decides the lane so kick/snare/cymbal patterns are readable
-    const lane = fam === 'kick' ? 14 : fam === 'snare' ? 8 : 2;
-    ctx.fillRect(x, lane, 1.5, 7);
+    ctx.fillStyle = famColor(fam in lane ? fam : 'other');
+    ctx.fillRect(x, lane[fam] ?? 15, 1.5, 5);
+    seen.add(fam in lane ? fam : 'other');
   }
+  buildLegend(seen);
 }
+
+function buildLegend(seen) {
+  const host = document.getElementById('hitlegend');
+  host.style.display = 'flex';
+  host.textContent = '';
+  for (const fam of [...FAMILIES].reverse().concat('other')) {   // kick first, reading order
+    if (!seen.has(fam)) continue;
+    const item = document.createElement('span');
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.style.background = famColor(fam);
+    item.append(chip, FAMILY_LABELS[fam] || fam);
+    host.appendChild(item);
+  }
+  const note = document.createElement('span');
+  note.className = 'note';
+  note.textContent = 'every detected hit · click to jump';
+  host.appendChild(note);
+}
+
 window.addEventListener('resize', drawHitStrip);
 document.getElementById('hitstrip').addEventListener('click', (e) => {
   if (!state.duration) return;
@@ -267,7 +388,7 @@ function strip(labelHtml, faderCb, extraBtns) {
   const el = document.createElement('div');
   el.className = 'strip';
   el.innerHTML = `<div class="name">${labelHtml}</div>
-    <div class="fader"><input type="range" min="0" max="1.5" step="0.01" value="1"></div>
+    <div class="fader"><input type="range" min="0" max="1.5" step="0.01" value="1" title="Level"></div>
     <div class="db">0.0 dB</div><div class="btns"></div>`;
   const input = el.querySelector('input');
   const db = el.querySelector('.db');
@@ -285,9 +406,11 @@ function buildBoard(job) {
   for (const s of state.stems) {
     const mute = document.createElement('button');
     mute.textContent = 'M';
+    mute.title = 'Mute';
     mute.onclick = () => { s.muted = !s.muted; mute.classList.toggle('on-mute', s.muted); applyGains(); };
     const solo = document.createElement('button');
     solo.textContent = 'S';
+    solo.title = 'Solo';
     solo.onclick = () => { s.solo = !s.solo; solo.classList.toggle('on-solo', s.solo); applyGains(); };
     board.appendChild(strip(niceName(s.name, job.stems), v => { s.fader = v; applyGains(); }, [mute, solo]));
   }
@@ -321,7 +444,7 @@ async function buildSheet(job) {
     }
   } else {
     box.innerHTML = `<object data="${job.sheet_view.url}" type="application/pdf">
-      <p style="color:#333">PDF preview unavailable — use the download button below.</p></object>`;
+      <p style="color:#333">The PDF preview could not load. Use the download button below instead.</p></object>`;
   }
 }
 
@@ -417,6 +540,14 @@ document.getElementById('speed').addEventListener('change', () => {
   const rate = parseFloat(document.getElementById('speed').value);
   for (const s of state.stems) { s.el.playbackRate = rate; s.el.preservesPitch = true; }
 });
+// Space plays and pauses, so the sticks never leave your hands.
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || e.repeat) return;
+  if (/^(INPUT|SELECT|TEXTAREA|BUTTON|SUMMARY)$/.test(e.target.tagName)) return;
+  if (!state.stems.length) return;
+  e.preventDefault();
+  play();
+});
 
 // ---------- A-B loop ----------
 function loopInfo() {
@@ -450,7 +581,7 @@ document.getElementById('clearAB').onclick = () => {
 document.getElementById('dlmix').onclick = async () => {
   const btn = document.getElementById('dlmix');
   btn.disabled = true;
-  btn.textContent = 'rendering…';
+  btn.textContent = 'Rendering…';
   try {
     const sr = 44100;
     const off = new OfflineAudioContext(2, Math.ceil(state.duration * sr), sr);
@@ -474,7 +605,7 @@ document.getElementById('dlmix').onclick = async () => {
     URL.revokeObjectURL(a.href);
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '&#8681; Download mix (your levels)';
+    btn.innerHTML = '&#8681; Download mix at your levels';
   }
 };
 
