@@ -23,6 +23,8 @@
     --mute-on: #d03b3b;   /* status: never reused as a series color */
     --solo-on: #fab219;
     --loop-on: #0ca30c;
+    --loop-ink: #0ca30c;  /* loop readout text: the status green, darkened on light */
+    --on-accent: #141413; /* text on an accent-filled button */
     --cap:     #e9e5da;   /* fader cap, cream like hardware */
     /* Hit-window series (validated categorical set on the dark well — the
        window stays dark glass in both themes, like a real meter bridge). */
@@ -44,7 +46,9 @@
       --well:    #141413;  /* the display window keeps its dark glass */
       --ink:     #0b0b0b;
       --ink-2:   #52514e;
-      --muted:   #898781;
+      --muted:   #6e6c66;  /* 4.5:1+ on the light surfaces */
+      --loop-ink: #087a08;
+      --on-accent: #ffffff;
       --line:    #e1e0d9;
       --accent:  #6250d6;
       --danger:  #d03b3b;
@@ -109,10 +113,10 @@
                       font-size: 1rem; width: 44px; height: 38px; border-radius: 7px; cursor: pointer; }
   .transport button:hover { border-color: var(--accent); }
   .transport button.small { width: auto; font-size: .78rem; padding: 0 .6rem; }
-  .transport button.on-loop { background: var(--loop-on); border-color: var(--loop-on); color: #fff; }
+  .transport button.on-loop { background: var(--loop-on); border-color: var(--loop-on); color: #0b0b0b; }
   #speed { background: var(--raised); color: var(--ink); border: 1px solid var(--line);
            border-radius: 6px; padding: .35rem .4rem; }
-  #loopinfo { color: var(--loop-on); font-size: .78rem; min-width: 7rem;
+  #loopinfo { color: var(--loop-ink); font-size: .78rem; min-width: 7rem;
               font-family: var(--mono); font-variant-numeric: tabular-nums; }
   #loopinfo:empty { display: none; }
   .seekcol { flex: 1 1 100%; order: 2; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -153,7 +157,7 @@
       text-decoration: none; font-size: .86rem; padding: .55rem .9rem; border-radius: 8px;
       cursor: pointer; display: inline-flex; gap: .45rem; align-items: center; }
   .downloads a:hover, .dlmixrow button:hover { border-color: var(--accent); }
-  .dlmixrow .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .dlmixrow .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .dlmixrow .primary:hover { filter: brightness(1.08); }
   #warnings { color: var(--muted); font-size: .8rem; white-space: pre-wrap; }
 
@@ -517,8 +521,10 @@ function seekTo(t) {
   t = Math.max(0, Math.min(t, state.duration - 0.02));
   for (const s of state.stems) s.el.currentTime = Math.min(t, s.el.duration || t);
   updateClock();
+  syncSheet(t);  // a jump while paused should show where you landed
 }
 function currentTime() { return state.stems.length ? masterEl().currentTime : 0; }
+document.getElementById('sheetpanel').addEventListener('toggle', () => syncSheet(currentTime()));
 
 function tick() {
   if (!state.playing) return;
