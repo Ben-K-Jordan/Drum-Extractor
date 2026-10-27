@@ -197,8 +197,10 @@ def note_name(pitch: int) -> str:
     return f"{_NOTE_NAMES[pitch % 12]}{pitch // 12 - 1}"
 
 
-def tab_header(tuning: tuple[int, ...], title: str | None = None, tempo: float | None = None) -> str:
-    """Human-readable header for a tab file: song, tuning (with octaves), legend."""
+def tab_header(tuning: tuple[int, ...], title: str | None = None, tempo: float | None = None,
+               has_x: bool = True) -> str:
+    """Human-readable header for a tab file: song, tuning (with octaves), and
+    the 'x' legend when the tab actually draws one."""
     lines = []
     if title:
         lines.append(f"== {title} ==")
@@ -206,7 +208,8 @@ def tab_header(tuning: tuple[int, ...], title: str | None = None, tempo: float |
     if tempo:
         info += f"   tempo: ~{round(tempo)} BPM"
     lines.append(info)
-    lines.append("x = note the transcriber heard but that doesn't fit the fretboard (kept in the MIDI)")
+    if has_x:
+        lines.append("x = note the transcriber heard but that doesn't fit the fretboard (kept in the MIDI)")
     return "\n".join(lines)
 
 
@@ -262,7 +265,8 @@ def render_ascii_tab(
 
     lines: list[str] = []
     if title or tempo:
-        lines.append(tab_header(tuning, title, tempo))
+        has_x = any(t == "x" for col in columns for t in col.values())
+        lines.append(tab_header(tuning, title, tempo, has_x=has_x))
         lines.append("")
     for si, system in enumerate(systems):
         if si:

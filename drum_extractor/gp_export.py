@@ -2,8 +2,10 @@
 
 Tabs as ASCII are readable, but ``.gp5`` is the lingua franca for
 guitarists/bassists — Guitar Pro, TuxGuitar and MuseScore all open it, with
-playback. Notes are quantized onto a 16th grid at the detected tempo (drums
-philosophy: onsets matter, durations are grid slots).
+playback. Onsets are quantized onto a 16th grid at the detected tempo; each
+note then lasts until the next onset (or its own end), never past the next beat
+line, and the gaps become rests that don't cross one either, so the staff reads
+as real rhythm (an eighth-note chug, not a 16th and a rest).
 
 Optional dependency: PyGuitarPro (the ``gp`` extra). Callers should treat a
 missing library as "skip the export", which the pipeline does.
@@ -19,7 +21,24 @@ from .logging_utils import get_logger
 
 log = get_logger(__name__)
 
-SIXTEENTHS_PER_BEAT = 4  # slot resolution: sixteenths (drums philosophy: onsets)
+SIXTEENTHS_PER_BEAT = 4  # slot resolution: sixteenths
+# Note values a run of 1-4 sixteenth slots inside one beat can take.
+_SLOT_VALUES = {1: (16, False), 2: (8, False), 3: (8, True), 4: (4, False)}
+
+
+def _rest_runs(start: int, stop: int):
+    """Split the empty slots [start, stop) into rests that stay inside a beat,
+    largest first where they line up (quarter on the beat, eighth on an 8th)."""
+    pos = start
+    while pos < stop:
+        if pos % SIXTEENTHS_PER_BEAT == 0 and stop - pos >= 4:
+            run = 4
+        elif pos % 2 == 0 and stop - pos >= 2 and (pos % SIXTEENTHS_PER_BEAT) + 2 <= SIXTEENTHS_PER_BEAT:
+            run = 2
+        else:
+            run = 1
+        yield pos, run
+        pos += run
 
 
 def write_gp5(
@@ -96,24 +115,36 @@ def write_gp5(
         for tr in song.tracks:
             tr.measures.append(gp.models.Measure(tr, header))
 
+    def add_beat(voice, slots: int, here=()) -> None:
+        value, dotted = _SLOT_VALUES[slots]
+        beat = gp.models.Beat(voice)
+        beat.duration = gp.models.Duration(value=value, isDotted=dotted)
+        beat.status = gp.models.BeatStatus.normal if here else gp.models.BeatStatus.rest
+        for bn in here:
+            gn = gp.models.Note(beat)
+            gn.type = gp.models.NoteType.normal
+            gn.string = n - bn.string  # type: ignore[operator]
+            gn.value = int(bn.fret)  # type: ignore[arg-type]
+            gn.velocity = int(max(15, min(127, bn.velocity)))
+            beat.notes.append(gn)
+        voice.beats.append(beat)
+
     for mi in range(n_measures):
         voice = track.measures[mi].voices[0]
-        for s in range(slots_per_measure):
-            beat = gp.models.Beat(voice)
-            beat.duration = gp.models.Duration(value=16)  # sixteenth
-            here = events.get(mi * slots_per_measure + s, [])
-            if here:
-                beat.status = gp.models.BeatStatus.normal
-                for bn in here:
-                    gn = gp.models.Note(beat)
-                    gn.type = gp.models.NoteType.normal
-                    gn.string = n - bn.string  # type: ignore[operator]
-                    gn.value = int(bn.fret)  # type: ignore[arg-type]
-                    gn.velocity = int(max(15, min(127, bn.velocity)))
-                    beat.notes.append(gn)
-            else:
-                beat.status = gp.models.BeatStatus.rest
-            voice.beats.append(beat)
+        m0, m1 = mi * slots_per_measure, (mi + 1) * slots_per_measure
+        onsets = sorted(s for s in events if m0 <= s < m1)
+        pos = m0
+        for k, slot in enumerate(onsets):
+            for _, run in _rest_runs(pos - m0, slot - m0):
+                add_beat(voice, run)
+            nxt = onsets[k + 1] if k + 1 < len(onsets) else m1
+            beat_end = (slot // SIXTEENTHS_PER_BEAT + 1) * SIXTEENTHS_PER_BEAT
+            own = max(max(1, int(round((bn.end - bn.start) / slot_s))) for bn in events[slot])
+            length = max(1, min(nxt - slot, beat_end - slot, own))
+            add_beat(voice, length, events[slot])
+            pos = slot + length
+        for _, run in _rest_runs(pos - m0, m1 - m0):
+            add_beat(voice, run)
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
