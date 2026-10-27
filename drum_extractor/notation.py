@@ -118,12 +118,13 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
 
     # A drum note lasts until the next onset in its own voice (standard drum
     # notation), so straight 8ths read as 8ths rather than 16th-plus-rest — but
-    # capped at ONE BEAT: drums are attacks, and a kick two beats before the
-    # next one should engrave as a quarter note + rests, not a half note. Also
-    # capped at the space remaining in the bar: music21's makeMeasures does NOT
-    # split an over-long note into tied notes; it packs the overflow into the
-    # same measure, producing an overfull/malformed bar. The last onset in a
-    # voice defaults to a one-beat length rather than a lone 1/grid sliver.
+    # never past the next BEAT LINE: drums are attacks, and a chart must show
+    # every beat once 16ths are around, so a kick on the 'a' of 2 engraves as a
+    # 16th + rests rather than a dotted 8th hiding beat 3. That also caps it at
+    # the bar end: music21's makeMeasures does NOT split an over-long note into
+    # tied notes; it packs the overflow into the same measure, producing an
+    # overfull/malformed bar. The last onset in a voice defaults to a one-beat
+    # length rather than a lone 1/grid sliver.
     bar_ql = beats_per_bar * (4.0 / beat_unit)
     ql_per_beat = 4.0 / beat_unit
     offsets_by_voice: dict[int, list[float]] = defaultdict(list)
@@ -136,7 +137,8 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
             gap = (offs[i + 1] - off) if i + 1 < len(offs) else ql_per_beat
             dur = min(ql_per_beat, max(grid_ql, round(gap / grid_ql) * grid_ql))
             pos_in_bar = off - (int(off // bar_ql) * bar_ql)
-            remaining = bar_ql - pos_in_bar
+            beat_end = (int(pos_in_bar / ql_per_beat + 1e-9) + 1) * ql_per_beat
+            remaining = min(bar_ql, beat_end) - pos_in_bar
             if remaining >= grid_ql - 1e-9:
                 dur = min(dur, remaining)
             dur_map[(vid, off)] = dur
@@ -145,8 +147,6 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
         elements = []
         stem_dir = "up" if voice_id == 1 else "down"
         note_dur = duration.Duration(dur_map[(voice_id, off)])
-        from music21 import articulations  # type: ignore
-
         for hit in hits:
             place = PLACEMENT.get(hit.instrument, PLACEMENT[SNARE])
             u = note.Unpitched()
@@ -163,7 +163,7 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
             if hit.velocity <= GHOST_VELOCITY and family in ("snare", "toms"):
                 u.noteheadParenthesis = True
             elif hit.velocity >= ACCENT_VELOCITY and place.voice == 1:
-                u.articulations.append(articulations.Accent())
+                u.articulations.append(_hands_accent())
             elements.append((u, place))
 
         if len(elements) == 1:
@@ -175,8 +175,10 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
             chord.duration = duration.Duration(note_dur.quarterLength)
             chord.stemDirection = stem_dir
             # music21 exports only the CHORD's articulations — accents left on
-            # member notes vanish (e.g. an accented snare under a hi-hat).
-            chord.articulations = [a for el, _ in elements for a in el.articulations]
+            # member notes vanish (e.g. an accented snare under a hi-hat). One
+            # mark per chord: two accented members would stack '>>'.
+            accented = any(a for el, _ in elements for a in el.articulations)
+            chord.articulations = [_hands_accent()] if accented else []
             voices[voice_id].insert(off, chord)
         else:  # fallback: insert individually (may collide visually)
             for el, _ in elements:
@@ -191,10 +193,59 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
     try:
         score.makeMeasures(inPlace=True)
         score.makeRests(fillGaps=True, inPlace=True)
+        _ensure_both_voices(score)
         _renumber_voices(score)
     except Exception as exc:  # pragma: no cover - music21 can be picky on messy input
         log.warning("makeMeasures/makeRests warning: %s", exc)
     return score
+
+
+def _hands_accent():
+    from music21 import articulations  # type: ignore
+
+    acc = articulations.Accent()
+    # Pinned above: in a bar whose feet voice is empty, renderers otherwise
+    # drop hands accents below the staff, where they read as kick accents.
+    acc.placement = "above"
+    return acc
+
+
+def _ensure_both_voices(score) -> None:
+    """Give every bar a hands voice and a feet voice.
+
+    makeMeasures flattens a bar where only one voice has notes (no <voice>
+    at all), so the empty voice shows no rest and its articulations lose
+    their side of the staff. Wrap loose notes back into their voice and fill
+    the missing one with a whole-bar rest.
+    """
+    from music21 import note, stream  # type: ignore
+
+    for measure in score.recurse().getElementsByClass("Measure"):
+        voices = list(measure.getElementsByClass(stream.Voice))
+        if not voices:
+            loose = list(measure.notesAndRests)
+            if all(el.isRest for el in loose):
+                continue
+            wrapped = stream.Voice()
+            for el in loose:
+                off = el.getOffsetBySite(measure)
+                measure.remove(el)
+                wrapped.insert(off, el)
+            measure.insert(0, wrapped)
+            voices = [wrapped]
+        roles = {_voice_role(v) for v in voices}
+        for role in ("1", "2"):
+            if role not in roles:
+                filler = stream.Voice(id=role)
+                filler.insert(0, note.Rest(quarterLength=measure.barDuration.quarterLength))
+                measure.insert(0, filler)
+
+
+def _voice_role(voice) -> str | None:
+    notes = list(voice.notes)
+    if not notes:
+        return None
+    return "2" if all(getattr(n, "stemDirection", None) == "down" for n in notes) else "1"
 
 
 def _renumber_voices(score) -> None:
@@ -209,9 +260,9 @@ def _renumber_voices(score) -> None:
 
     for measure in score.recurse().getElementsByClass("Measure"):
         for v in measure.getElementsByClass(stream.Voice):
-            notes = list(v.notes)
-            all_down = bool(notes) and all(getattr(n, "stemDirection", None) == "down" for n in notes)
-            v.id = "2" if all_down else "1"
+            role = _voice_role(v)
+            if role:  # rest-only filler voices keep the id they were given
+                v.id = role
 
 
 def transcription_to_musicxml(transcription: Transcription, out_path: str | Path, config: NotationConfig | None = None, quantize: QuantizeConfig | None = None) -> Path:
