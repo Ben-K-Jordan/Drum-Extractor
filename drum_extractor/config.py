@@ -75,6 +75,9 @@ class BassTranscriptionConfig:
     minimum_note_length_ms: float = 90.0
     onset_threshold: float = 0.5
     frame_threshold: float = 0.3
+    # Re-split notes at repeated pick attacks basic-pitch merges (low-string
+    # chugs); see bass.split_reattacks.
+    split_reattacks: bool = True
     refine_with_crepe: bool = False  # octave-correct with torchcrepe (needs the extra)
     # Standard 4-string bass tuning (E1 A1 D2 G2) as MIDI note numbers, low->high.
     tuning: tuple[int, ...] = (28, 33, 38, 43)

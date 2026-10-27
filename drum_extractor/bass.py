@@ -38,6 +38,8 @@ def transcribe_bass(bass_stem: str | Path, config: BassTranscriptionConfig | Non
         frame_threshold=config.frame_threshold,
     )
 
+    if config.split_reattacks:
+        notes = split_reattacks(bass_stem, notes)
     if config.refine_with_crepe:
         notes = _refine_octaves_with_crepe(bass_stem, notes, config.min_frequency)
 
@@ -83,6 +85,63 @@ def basic_pitch_notes(
             notes.append(BassNote(start=float(n.start), end=float(n.end), pitch=int(n.pitch), velocity=int(n.velocity)))
     notes.sort(key=lambda n: (n.start, n.pitch))
     return notes
+
+
+def split_reattacks(stem: str | Path, notes: list[BassNote], min_piece: float = 0.06) -> list[BassNote]:
+    """Cut notes where the same pitch is picked again.
+
+    basic-pitch's onset head misses repeated attacks on low notes: three
+    palm-muted F1 chugs on the E string (~44 Hz) come out as one long F1, so
+    the tab silently drops two thirds of the riff. On an isolated bass stem
+    every pick attack is an audio onset, so a note is cut at each onset inside
+    it where the level actually jumps, unless another note starts there (a
+    pitch change the note merely overlaps) or a piece would be shorter than
+    ``min_piece`` (a 16th at 240 BPM is 62 ms).
+    """
+    if not notes:
+        return notes
+    try:
+        import bisect
+
+        import librosa  # type: ignore
+    except ModuleNotFoundError:
+        log.info("librosa not installed; skipping repeated-note splitting")
+        return notes
+
+    y, sr = librosa.load(str(stem), sr=22050, mono=True)
+    hop = 128
+    onsets = librosa.onset.onset_detect(y=y, sr=sr, hop_length=hop, units="time", backtrack=True)
+    rms = librosa.feature.rms(y=y, frame_length=512, hop_length=hop)[0]
+
+    def jumps(t: float) -> bool:
+        i = int(t * sr / hop)
+        before = rms[max(0, i - 2): i + 1].min() if i < len(rms) else 0.0
+        after = rms[i: i + int(0.05 * sr / hop) + 1].max() if i < len(rms) else 0.0
+        # A pick attack lifts the level ~15%+ even on a saturated, still-ringing
+        # string; the stray onsets a held note throws (vibrato, fret noise) don't.
+        return after > 1.1 * before + 1e-6
+
+    starts = sorted(n.start for n in notes)
+    out: list[BassNote] = []
+    for n in notes:
+        cuts: list[float] = []
+        for t in onsets:
+            if not (n.start + min_piece < t < n.end - min_piece):
+                continue
+            if t - (cuts[-1] if cuts else n.start) < min_piece:
+                continue
+            # The note model starts notes up to ~80 ms ahead of the audio onset.
+            i = bisect.bisect_left(starts, t - 0.08)
+            if i < len(starts) and starts[i] <= t + 0.04:
+                continue
+            if jumps(float(t)):
+                cuts.append(float(t))
+        bounds = [n.start, *cuts, n.end]
+        out += [BassNote(start=a, end=b, pitch=n.pitch, velocity=n.velocity) for a, b in zip(bounds, bounds[1:])]
+    out.sort(key=lambda n: (n.start, n.pitch))
+    if len(out) > len(notes):
+        log.info("Bass: split %d repeated attacks the note model merged", len(out) - len(notes))
+    return out
 
 
 def _refine_octaves_with_crepe(bass_stem: Path, notes: list[BassNote], min_frequency: float = 32.7) -> list[BassNote]:
