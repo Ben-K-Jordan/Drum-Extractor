@@ -193,6 +193,7 @@ def build_score(transcription: Transcription, config: NotationConfig | None = No
     try:
         score.makeMeasures(inPlace=True)
         score.makeRests(fillGaps=True, inPlace=True)
+        _split_rests(score, 4.0 / beat_unit)
         _ensure_both_voices(score)
         _renumber_voices(score)
     except Exception as exc:  # pragma: no cover - music21 can be picky on messy input
@@ -208,6 +209,54 @@ def _hands_accent():
     # drop hands accents below the staff, where they read as kick accents.
     acc.placement = "above"
     return acc
+
+
+def _rest_pieces(start: float, stop: float, bar_ql: float, beat_ql: float) -> list[tuple[float, float]]:
+    """(offset, length) rests covering [start, stop) the way a drum chart writes
+    them: never across the middle of the bar, and a rest that starts off the
+    beat stops at the next beat line (a 16th first if it starts on an e or a)."""
+    eps = 1e-9
+    beats = round(bar_ql / beat_ql)
+    half = bar_ql / 2 if beats % 2 == 0 and beats > 1 else None
+    pieces, pos = [], start
+    while pos < stop - eps:
+        limit = stop
+        if half is not None and pos < half - eps:
+            limit = min(limit, half)
+        into_beat = (pos / beat_ql) % 1
+        if into_beat < eps or into_beat > 1 - eps:
+            whole = int((limit - pos) / beat_ql + eps) * beat_ql
+            length = whole if whole >= beat_ql else limit - pos
+        else:
+            next_beat = (int(pos / beat_ql + eps) + 1) * beat_ql
+            length = min(limit, next_beat) - pos
+            sixteenth = beat_ql / 4
+            if (pos / sixteenth) % 2 > 0.5 and length > sixteenth + eps:
+                length = sixteenth
+        pieces.append((pos, length))
+        pos += length
+    return pieces
+
+
+def _split_rests(score, beat_ql: float) -> None:
+    """Re-cut the gap-filling rests so every beat stays visible (makeRests fills
+    a gap with one long rest, e.g. a dotted quarter from beat 2 into beat 3)."""
+    from music21 import note, stream  # type: ignore
+
+    for measure in score.recurse().getElementsByClass("Measure"):
+        bar_ql = measure.barDuration.quarterLength
+        for container in [measure, *measure.getElementsByClass(stream.Voice)]:
+            for rest in list(container.getElementsByClass(note.Rest)):
+                start = float(rest.getOffsetBySite(container))
+                length = float(rest.quarterLength)
+                if length >= bar_ql - 1e-9:
+                    continue  # a whole-bar rest stays whole
+                pieces = _rest_pieces(start, start + length, bar_ql, beat_ql)
+                if len(pieces) < 2:
+                    continue
+                container.remove(rest)
+                for off, ql in pieces:
+                    container.insert(off, note.Rest(quarterLength=ql))
 
 
 def _ensure_both_voices(score) -> None:

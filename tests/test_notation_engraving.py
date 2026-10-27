@@ -67,3 +67,17 @@ def test_accents_are_single_and_above_the_staff(tmp_path):
     accents = list(root.iter("accent"))
     assert len(accents) == 1
     assert accents[0].get("placement") == "above"
+
+
+def test_rests_never_hide_the_middle_of_the_bar(tmp_path):
+    # Kick on 1, the '&' of 1 and the '&' of 3: the gap from beat 2 to the
+    # '&' of 3 must not be one dotted-quarter rest straddling beat 3.
+    hits = [DrumHit(0.0, "kick", 110, bar=1, beat=b) for b in (0.0, 0.5, 2.5)]
+    root = _xml(tmp_path, hits)
+    measure = next(root.iter("measure"))
+    rests = [(a, b) for a, b, rest in _voice_spans(root, measure, "2") if rest]
+    assert rests, "expected rests in the feet voice"
+    for start, end in rests:
+        assert not (start < 2.0 - 1e-9 < end - 1e-9), f"rest {start}-{end} hides beat 3"
+        if start % 1 > 1e-9:
+            assert end <= int(start) + 1 + 1e-9, f"off-beat rest {start}-{end} crosses a beat line"
