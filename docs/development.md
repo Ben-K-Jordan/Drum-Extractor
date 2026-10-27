@@ -86,13 +86,14 @@ is the serious transcriber):
 | intuition-set thresholds | 0.00 | 0.82 | 0.12 | 0.00 | 0.00 | **0.46** |
 | shipped (robust-tuned) | 0.00 | 0.86 | 0.71 | 0.71 | 0.00 | **0.73** |
 
-The bank also quantified the double-kick booster: kick recall 0.67 → 0.98 on
-200 BPM sixteenth double-kick, at the cost of aggregate F elsewhere — hence
-it's a per-song flag, not a default.
+The bank also quantified the double-kick booster: on 200 BPM sixteenth
+double-kick, kick recall 0.67 → 1.00 and kick F-measure 0.80 → 0.98, at the
+cost of aggregate F elsewhere (0.73 → 0.67 across the bank) — hence it's a
+per-song flag, not a default.
 
 ## CI
 
-`.github/workflows/ci.yml` runs two jobs on every push:
+`.github/workflows/ci.yml` runs two jobs on every push to main and every pull request:
 
 - **Test suite** — the full pytest suite with the drums/notation/web extras
   (heavy ML deps deliberately absent; their tests skip by design).

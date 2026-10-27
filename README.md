@@ -172,8 +172,10 @@ OaF-Drums (Apache-2.0) if you need a commercial-safe chain. This project's own
 code is MIT.
 
 Extras for fast metal: a **double-kick booster** (`--boost-double-kick`)
-recovers blast-tempo kicks from the low band that full-kit models merge
-(measured: kick recall 0.67 → 0.98 at 200 BPM), and an optional **two-model
+recovers fast kicks from the low band that full-kit transcription merges
+(measured on the bank's 200 BPM sixteenth-note double-kick groove with the
+built-in transcriber: kick recall 0.67 → 1.00, kick F-measure 0.80 → 0.98;
+it costs accuracy on other grooves, so it's opt-in), and an optional **two-model
 drum ensemble** with UVR-style spectral blending cuts distorted-guitar bleed.
 
 ## What to expect (honest version)
@@ -201,7 +203,7 @@ drum-extractor bank-build -o bank
 drum-extractor bank-eval bank --backend onset   # or: --backend adtof
 ```
 
-CI runs the full test suite **and this accuracy gate** on every push — a
+CI runs the full test suite **and this accuracy gate** on every push to main and every pull request — a
 change that degrades transcription fails the build. The tuning story (including
 an overfitting mistake the process itself caught) is in
 [docs/development.md](docs/development.md), along with the full QA history:

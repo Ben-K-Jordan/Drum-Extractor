@@ -3,17 +3,19 @@
 Synthesizes a rendition of the classic Smells-Like-Teen-Spirit-style
 four-power-chord riff (F5 Bb5 Ab5 Db5, ~117 BPM) as separated stems using the
 repo's own drum synthesizer plus simple bass/guitar synths, then runs the REAL
-pipeline on it (basic-pitch bass transcription, onset drum backend,
-quantization, sheet engraving, .gp5 export) — everything except Demucs, which
-is pointless on stems we already have.
+pipeline on it (ADTOF drum transcription when installed, else the built-in
+onset backend; basic-pitch bass transcription; quantization, sheet engraving,
+.gp5 export) — everything except Demucs, which is pointless on stems we
+already have.
 
     pip install -e ".[drums,bass,notation,gp]"
     python examples/demo_riff.py
 
-Outputs land in examples/out/demo-riff/: stems/, bass.tab.txt, bass.gp5,
-drums.musicxml, drums.mid, transcription.json... Drop the generated
-"Smells Like Teen Spirit (demo riff).wav" onto the web UI to see the mixer
-with a song that transcribes cleanly.
+Outputs land in "examples/out/Smells Like Teen Spirit (demo riff)/": stems/,
+bass.tab.txt, bass.gp5, drums.musicxml (the transcriber's draft),
+reference.musicxml (the known groove), drums.mid, transcription.json... Drop
+the generated "Smells Like Teen Spirit (demo riff).wav" onto the web UI to see
+the mixer on a song whose real drum part you know.
 """
 
 from __future__ import annotations
@@ -141,9 +143,15 @@ def main() -> None:
     from drum_extractor.config import DrumTranscriptionConfig, NotationConfig, PipelineConfig, QuantizeConfig
     from drum_extractor.pipeline import run_pipeline
 
+    import shutil
+
+    # The real default transcriber when it's installed; the dependency-light
+    # fallback otherwise, so the demo runs anywhere.
+    backend = "adtof" if shutil.which("adtof") else "onset"
+    print(f"drum transcription backend: {backend}")
     config = PipelineConfig(
         output_dir=OUT,
-        drums=DrumTranscriptionConfig(backend="onset"),
+        drums=DrumTranscriptionConfig(backend=backend),
         quantize=QuantizeConfig(backend="librosa", fixed_tempo=BPM, grid_mode="constant"),
         do_separation=False,
     )
