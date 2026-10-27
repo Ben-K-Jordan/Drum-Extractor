@@ -316,9 +316,15 @@ function drawHitStrip() {
   const canvas = document.getElementById('hitstrip');
   const hits = (state.timing && state.timing.drum_hits) || [];
   const W = canvas.clientWidth || canvas.parentElement.clientWidth || 600;
-  canvas.width = W;  // match CSS pixels so markers line up with the seek bar
+  const H = 34;
+  // Backing store at device pixels (sharp on Retina); drawing stays in CSS
+  // pixels so markers line up with the seek bar.
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
   const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, W, canvas.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
   if (!hits.length || !state.duration) {
     canvas.style.display = 'none';
     document.getElementById('hitlegend').style.display = 'none';
