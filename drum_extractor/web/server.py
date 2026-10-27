@@ -78,13 +78,13 @@ class Job:
             if self.result.drum_midi:
                 downloads["midi"] = {"url": f"/download/{self.id}/midi", "label": "Drum MIDI"}
             if self.result.bass_tab:
-                downloads["tab"] = {"url": f"/download/{self.id}/tab", "label": "Bass tab"}
+                downloads["tab"] = {"url": f"/download/{self.id}/tab", "label": "Bass tab (.txt)"}
             if self.result.bass_midi:
                 downloads["bmidi"] = {"url": f"/download/{self.id}/bmidi", "label": "Bass MIDI"}
             if self.result.bass_gp:
                 downloads["gpb"] = {"url": f"/download/{self.id}/gpb", "label": "Bass tab (.gp5)"}
             if self.result.guitar_tab:
-                downloads["gtab"] = {"url": f"/download/{self.id}/gtab", "label": "Guitar tab"}
+                downloads["gtab"] = {"url": f"/download/{self.id}/gtab", "label": "Guitar tab (.txt)"}
             if self.result.guitar_gp:
                 downloads["gpg"] = {"url": f"/download/{self.id}/gpg", "label": "Guitar tab (.gp5)"}
             if self.result.guitar_midi:
