@@ -34,7 +34,15 @@ def quantize(transcription: Transcription, audio_path: str | Path, config: Quant
     if config.backend == "none":
         return transcription
 
-    tempo, beats, downbeats = _detect_beats(Path(audio_path), config)
+    tempo, beats, downbeats, bars_tracked = _detect_beats(Path(audio_path), config)
+    if not bars_tracked:
+        phase = _drum_bar_phase(transcription.drum_hits, beats, config.beats_per_bar)
+        if phase:
+            downbeats = beats[phase:: config.beats_per_bar]
+        log.info(
+            "Bar phase %s (librosa tracks beats, not bars; install madmom for tracked downbeats).",
+            "read from the drums: kick on 1, snare on 2 and 4" if phase else "assumed from the first beat",
+        )
 
     hit_times = [h.time for h in transcription.drum_hits]
     t_lo = min(hit_times) if hit_times else None
@@ -61,13 +69,68 @@ def quantize(transcription: Transcription, audio_path: str | Path, config: Quant
     return transcription
 
 
-def _detect_beats(audio_path: Path, config: QuantizeConfig) -> tuple[float | None, list[float], list[float]]:
+def _detect_beats(audio_path: Path, config: QuantizeConfig) -> tuple[float | None, list[float], list[float], bool]:
+    """Return ``(tempo, beats, downbeats, bars_tracked)``; the flag is False when
+    the downbeats are only assumed from the beats (the librosa backend)."""
     if config.backend == "madmom":
         try:
-            return _detect_madmom(audio_path, config)
+            return (*_detect_madmom(audio_path, config), True)
         except Exception as exc:  # madmom has heavy/old deps; fall back cleanly
             log.warning("madmom beat tracking failed (%s); using librosa.", exc)
-    return _detect_librosa(audio_path, config)
+    return (*_detect_librosa(audio_path, config), False)
+
+
+# How strongly a hit on each beat of the bar says "this phase is right", for the
+# rock/punk/metal backbeat: kick on 1 (a little on 3), snare on 2 and 4, crash
+# on 1. Hats and ride keep time on every beat, so they abstain.
+_PHASE_VOTES: dict[int, dict[str, dict[int, float]]] = {
+    4: {"kick": {0: 1.0, 2: 0.25}, "snare": {1: 1.0, 3: 1.0}, "crash": {0: 0.75}},
+    2: {"kick": {0: 1.0}, "snare": {1: 1.0}, "crash": {0: 0.75}},
+}
+
+
+def _drum_bar_phase(hits: list, beats: list[float], beats_per_bar: int) -> int:
+    """Offset into ``beats`` of the first bar's beat one, read from the drums.
+
+    librosa tracks beats but not bars, and its first tracked beat is often not
+    a downbeat (it trims a weak opening beat), so "every Nth beat from the
+    first" can displace the whole chart — the backbeat engraved on 1 and 3.
+    Each candidate phase is scored by the votes above. A phase and its
+    half-bar twin share all the backbeat evidence (only kick-on-1 tells them
+    apart), so the winner must clearly beat every OTHER phase; choosing between
+    twins can only move the chart by half a bar, never off the backbeat.
+    Returns 0 (keep the naive phase) when the meter has no vote table or the
+    drums don't clearly prefer a phase: blast beats, half-time, sparse intros.
+    """
+    votes = _PHASE_VOTES.get(beats_per_bar)
+    if not votes or len(beats) < 2 * beats_per_bar or not hits:
+        return 0
+    import bisect
+    import statistics
+
+    from .gm_drum_map import CRASH, FAMILY
+
+    period = statistics.median(b - a for a, b in zip(beats, beats[1:]))
+    tol = 0.15 * period  # well inside a 16th, so off-beat strokes don't vote
+    scores = [0.0] * beats_per_bar
+    for h in hits:
+        table = votes.get("crash" if h.instrument == CRASH else FAMILY.get(h.instrument, ""))
+        if not table:
+            continue
+        i = bisect.bisect_left(beats, h.time)
+        near = min((j for j in (i - 1, i) if 0 <= j < len(beats)), key=lambda j: abs(beats[j] - h.time))
+        if abs(beats[near] - h.time) > tol:
+            continue
+        for phase in range(beats_per_bar):
+            scores[phase] += table.get((near - phase) % beats_per_bar, 0.0)
+
+    best = max(range(beats_per_bar), key=scores.__getitem__)  # ties keep phase 0
+    twin = (best + beats_per_bar // 2) % beats_per_bar
+    rivals = [s for p, s in enumerate(scores) if p != best and (p != twin or p == 0)]
+    # A couple of bars of evidence and a clear margin, or leave the phase alone.
+    if best == 0 or scores[best] < 4.0 or scores[best] < 1.2 * max(rivals):
+        return 0
+    return best
 
 
 def _detect_madmom(audio_path: Path, config: QuantizeConfig) -> tuple[float | None, list[float], list[float]]:
@@ -124,13 +187,8 @@ def _detect_librosa(audio_path: Path, config: QuantizeConfig) -> tuple[float | N
     tempo_scalar = float(tempo_arr.flat[0]) if tempo_arr.size and tempo_arr.flat[0] > 0 else None
     tempo_val = config.fixed_tempo or tempo_scalar or _tempo_from_beats(beats)
     # librosa gives beats but not downbeats; assume bar starts every N beats.
-    # That bar PHASE is a guess — madmom gives real downbeats.
+    # That bar PHASE is a guess, which quantize() corrects from the drums.
     downbeats = beats[:: config.beats_per_bar] if beats else []
-    log.info(
-        "librosa backend: downbeats assumed every %d beats from the first beat "
-        "(bar phase is a guess; install madmom for bar-accurate downbeats).",
-        config.beats_per_bar,
-    )
     return tempo_val, beats, downbeats
 
 
@@ -170,7 +228,7 @@ def _constant_beats(
     # the anchor anyway — extending for them would prepend a bar that ends up
     # completely empty (shifting every bar number and creating negative beats).
     half_step = period / max(1, config.grid // config.beat_unit) / 2.0
-    n_back = max(0, math.ceil((anchor - lo) / period)) if lo < anchor - half_step else 0
+    n_back = max(0, math.ceil((anchor - lo - half_step) / period)) if lo < anchor - half_step else 0
     n_back = min(n_back, 256 * bpb)
     n_back += (-n_back) % bpb
     start = anchor - n_back * period

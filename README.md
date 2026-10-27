@@ -122,7 +122,7 @@ command.
 |---|---|---|
 | **ADTOF** | The best open drum transcriber (trained on rock/metal) — without it a rough built-in fallback is used | `pip install -e ".[adtof]"` |
 | **MuseScore 4** | PDF sheet export (MusicXML works without it) | [musescore.org](https://musescore.org), CLI on PATH |
-| **madmom** | Bar-accurate downbeat tracking (librosa fallback otherwise) | `pip install -e ".[quantize]"` — its old build chain can fail on modern Python, which is why it's not in `[all]` |
+| **madmom** | Tracked downbeats (without it, librosa finds the beats and the bar lines are read from the drums: kick on 1, snare on 2 and 4) | `pip install -e ".[quantize]"` — its old build chain can fail on modern Python, which is why it's not in `[all]` |
 | **audio-separator** | Blend a second drum model with Demucs (`--ensemble-model`) | `pip install -e ".[ensemble]"` — its strict dependency pins can fight the rest of the stack, which is why it's not in `[all]` |
 
 **Docker, built locally** (instead of the prebuilt `ghcr.io` image):
@@ -212,7 +212,7 @@ project's real source.
 
 ```bash
 ./install.sh --light          # no torch/TF stacks: drums, notation, web, gp5
-.venv/bin/pytest -q           # 150 tests, no GPU or model downloads needed
+.venv/bin/pytest -q           # ~180 tests, no GPU or model downloads needed
 ```
 
 Issues and PRs welcome — especially real-world reports of where transcription
